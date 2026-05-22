@@ -32,15 +32,114 @@ def _extract_vba_macros(file_path):
 
 
 def convert_excel_with_formulas(job_id, job_dir, file_path):
+    import colorsys
     from openpyxl import load_workbook
     from openpyxl.utils import get_column_letter
+    from openpyxl.xml.functions import QName, fromstring
+    
+    def get_theme_colors(wb):
+        if not getattr(wb, "loaded_theme", None):
+            return []
+        try:
+            xlmns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+            root = fromstring(wb.loaded_theme)
+            theme_el = root.find(QName(xlmns, 'themeElements').text)
+            color_scheme = theme_el.find(QName(xlmns, 'clrScheme').text)
+            
+            theme_names = [
+                'lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 
+                'accent3', 'accent4', 'accent5', 'accent6'
+            ]
+            
+            colors = []
+            for name in theme_names:
+                element = color_scheme.find(QName(xlmns, name).text)
+                if element is None:
+                    colors.append("FFFFFF")
+                    continue
+                sys_clr = element.find(QName(xlmns, 'sysClr').text)
+                srgb_clr = element.find(QName(xlmns, 'srgbClr').text)
+                
+                if srgb_clr is not None:
+                    colors.append(srgb_clr.get('val'))
+                elif sys_clr is not None:
+                    colors.append(sys_clr.get('lastClr') or "FFFFFF")
+                else:
+                    colors.append("FFFFFF")
+            return colors
+        except Exception:
+            return []
+
+    def apply_tint(rgb_hex, tint):
+        if not tint:
+            return rgb_hex
+        try:
+            r = int(rgb_hex[0:2], 16) / 255.0
+            g = int(rgb_hex[2:4], 16) / 255.0
+            b = int(rgb_hex[4:6], 16) / 255.0
+            h, l, s = colorsys.rgb_to_hls(r, g, b)
+            if tint < 0:
+                l = l * (1.0 + tint)
+            else:
+                l = l * (1.0 - tint) + tint
+            l = max(0.0, min(1.0, l))
+            r, g, b = colorsys.hls_to_rgb(h, l, s)
+            return f"{int(r * 255):02X}{int(g * 255):02X}{int(b * 255):02X}"
+        except Exception:
+            return rgb_hex
+
+    def get_cell_color(cell, theme_colors):
+        if not cell.fill or cell.fill.fill_type != "solid":
+            return None
+        color = cell.fill.start_color
+        if color.type == "rgb" and isinstance(color.rgb, str):
+            rgb = color.rgb[-6:]
+            if rgb.lower() != "000000":
+                return f"#{rgb}"
+        elif color.type == "theme" and color.theme is not None:
+            if theme_colors and color.theme < len(theme_colors):
+                base_color = theme_colors[color.theme]
+                rgb = apply_tint(base_color, color.tint)
+                return f"#{rgb}"
+        return None
+
+    def get_text_color_for_background(bg_hex):
+        if bg_hex.startswith("#"):
+            bg_hex = bg_hex[1:]
+        try:
+            r = int(bg_hex[0:2], 16)
+            g = int(bg_hex[2:4], 16)
+            b = int(bg_hex[4:6], 16)
+            luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+            return "#000000" if luminance > 0.5 else "#FFFFFF"
+        except Exception:
+            return "#FFFFFF"
+
     wb_data = load_workbook(file_path, data_only=True, read_only=False)
     wb_formula = load_workbook(file_path, data_only=False, read_only=False)
+    theme_colors = get_theme_colors(wb_formula)
     parts = []
 
     for name in wb_formula.sheetnames:
         ws_d, ws_f = wb_data[name], wb_formula[name]
         
+        # Build merged cells map
+        merged_ranges = ws_d.merged_cells.ranges
+        merged_map = {}
+        skip_cells = set()
+        
+        for rng in merged_ranges:
+            min_col, min_row, max_col, max_row = rng.bounds
+            rowspan = max_row - min_row + 1
+            colspan = max_col - min_col + 1
+            
+            for r in range(min_row, max_row + 1):
+                for c in range(min_col, max_col + 1):
+                    if r == min_row and c == min_col:
+                        merged_map[(r, c)] = (rowspan, colspan)
+                    else:
+                        skip_cells.add((r, c))
+
         images_by_cell = {}
         img_counter = 0
         max_img_row = -1
@@ -72,11 +171,11 @@ def convert_excel_with_formulas(job_id, job_dir, file_path):
                     f.write(blob)
                     
                 encoded_filename = urllib.parse.quote(save_name)
-                md_img = f"![{save_name}]({encoded_filename})"
+                html_img = f"<img src='{encoded_filename}' alt='{save_name}' style='max-height: 100px; display: inline-block; vertical-align: middle; margin: 2px;' />"
                 
                 if (row_idx, col_idx) not in images_by_cell:
                     images_by_cell[(row_idx, col_idx)] = []
-                images_by_cell[(row_idx, col_idx)].append(md_img)
+                images_by_cell[(row_idx, col_idx)].append(html_img)
             except Exception as e:
                 print(f"Error extracting image from Excel: {e}")
                 
@@ -88,40 +187,92 @@ def convert_excel_with_formulas(job_id, job_dir, file_path):
             sheet_title += " (sheet ẩn)"
         parts.append(f"## {sheet_title}\n")
         
-        rows = []
-        for r_idx, (row_d, row_f) in enumerate(zip(
-            ws_d.iter_rows(max_row=actual_max_row, max_col=actual_max_col, values_only=True),
-            ws_f.iter_rows(max_row=actual_max_row, max_col=actual_max_col, values_only=False)
-        )):
-            row_data = []
-            for c_idx, (val, cell_f) in enumerate(zip(row_d, row_f)):
-                raw = cell_f.value if cell_f else None
+        # Check if there is any data or merge cells or images in the sheet to prevent rendering empty sheets
+        has_any_data = False
+        for r in range(1, actual_max_row + 1):
+            for c in range(1, actual_max_col + 1):
+                if ws_d.cell(row=r, column=c).value is not None or (r - 1, c - 1) in images_by_cell or (r, c) in merged_map:
+                    has_any_data = True
+                    break
+            if has_any_data:
+                break
+                
+        if not has_any_data:
+            continue
+            
+        sheet_html = []
+        sheet_html.append("<div style='overflow-x: auto; margin-bottom: 20px;'>")
+        sheet_html.append("  <table style='border-collapse: collapse; width: 100%; border: 1px solid rgba(255,255,255,0.1); min-width: 600px;'>")
+        
+        # Header (Column Letters A, B, C...)
+        sheet_html.append("    <thead>")
+        sheet_html.append("      <tr style='background-color: rgba(255,255,255,0.05);'>")
+        sheet_html.append("        <th style='border: 1px solid rgba(255,255,255,0.1); padding: 8px; text-align: center; font-weight: bold; width: 40px;'></th>")
+        for c in range(1, actual_max_col + 1):
+            sheet_html.append(f"        <th style='border: 1px solid rgba(255,255,255,0.1); padding: 8px; text-align: center; font-weight: bold;'>{get_column_letter(c)}</th>")
+        sheet_html.append("      </tr>")
+        sheet_html.append("    </thead>")
+        
+        # Body (Rows 1, 2, 3...)
+        sheet_html.append("    <tbody>")
+        
+        for r in range(1, actual_max_row + 1):
+            row_has_data = False
+            for c in range(1, actual_max_col + 1):
+                if ws_d.cell(row=r, column=c).value is not None or (r - 1, c - 1) in images_by_cell or (r, c) in merged_map or (r, c) in skip_cells:
+                    row_has_data = True
+                    break
+            
+            if not row_has_data:
+                continue
+                
+            sheet_html.append("      <tr>")
+            # Row index cell
+            sheet_html.append(f"        <td style='border: 1px solid rgba(255,255,255,0.1); padding: 8px; font-weight: bold; background-color: rgba(255,255,255,0.05); text-align: center;'>{r}</td>")
+            
+            for c in range(1, actual_max_col + 1):
+                if (r, c) in skip_cells:
+                    continue
+                    
+                cell_d = ws_d.cell(row=r, column=c)
+                cell_f = ws_f.cell(row=r, column=c)
+                
+                val = cell_d.value
+                raw = cell_f.value
+                
                 if isinstance(raw, str) and raw.startswith('='):
                     text = f"{val if val is not None else ''} (`{raw}`)"
                 else:
                     text = str(val) if val is not None else ''
                     
-                imgs = images_by_cell.get((r_idx, c_idx), [])
+                imgs = images_by_cell.get((r - 1, c - 1), [])
                 if imgs:
                     text = text + " " + " ".join(imgs) if text else " ".join(imgs)
-                    
-                row_data.append(_escape_cell(text.strip()))
                 
-            if any(c.strip() != '' for c in row_data):
-                rows.append(row_data)
-
-        if not rows:
-            continue
-        ncols = max(len(r) for r in rows)
-        if ncols == 0:
-            continue
+                # Style and merges
+                td_style = "border: 1px solid rgba(255,255,255,0.1); padding: 8px; vertical-align: top; white-space: pre-wrap;"
+                color = get_cell_color(cell_d, theme_colors)
+                if color:
+                    text_color = get_text_color_for_background(color)
+                    td_style += f" background-color: {color}; color: {text_color};"
+                    
+                merge_attrs = ""
+                if (r, c) in merged_map:
+                    rowspan, colspan = merged_map[(r, c)]
+                    if rowspan > 1:
+                        merge_attrs += f" rowspan='{rowspan}'"
+                    if colspan > 1:
+                        merge_attrs += f" colspan='{colspan}'"
+                
+                sheet_html.append(f"        <td style='{td_style}'{merge_attrs}>{text}</td>")
+                
+            sheet_html.append("      </tr>")
             
-        header_row = [get_column_letter(i + 1) for i in range(ncols)]
-        parts.append('| ' + ' | '.join(header_row) + ' |')
-        parts.append('| ' + ' | '.join(['---'] * ncols) + ' |')
-        for row in rows:
-            parts.append('| ' + ' | '.join((row + [''] * ncols)[:ncols]) + ' |')
-        parts.append('')
+        sheet_html.append("    </tbody>")
+        sheet_html.append("  </table>")
+        sheet_html.append("</div>\n")
+        
+        parts.append("\n".join(sheet_html))
 
     wb_data.close()
     wb_formula.close()

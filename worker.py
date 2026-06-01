@@ -115,10 +115,18 @@ def convert_excel_with_formulas(job_id, job_dir, file_path):
         except Exception:
             return "#FFFFFF"
 
+    style_block = """<style>
+  .excel-table { border-collapse: collapse; width: 100%; border: 1px solid rgba(255,255,255,0.1); min-width: 600px; margin-bottom: 20px; }
+  .excel-table th { border: 1px solid rgba(255,255,255,0.1); padding: 8px; text-align: center; font-weight: bold; background-color: rgba(255,255,255,0.05); }
+  .excel-table td { border: 1px solid rgba(255,255,255,0.1); padding: 8px; vertical-align: top; white-space: pre-wrap; }
+  .excel-table .row-idx { font-weight: bold; background-color: rgba(255,255,255,0.05); text-align: center; width: 40px; }
+</style>
+"""
+
     wb_data = load_workbook(file_path, data_only=True, read_only=False)
     wb_formula = load_workbook(file_path, data_only=False, read_only=False)
     theme_colors = get_theme_colors(wb_formula)
-    parts = []
+    parts = [style_block]
 
     for name in wb_formula.sheetnames:
         ws_d, ws_f = wb_data[name], wb_formula[name]
@@ -179,8 +187,48 @@ def convert_excel_with_formulas(job_id, job_dir, file_path):
             except Exception as e:
                 print(f"Error extracting image from Excel: {e}")
                 
-        actual_max_row = max(ws_d.max_row, max_img_row + 1)
-        actual_max_col = max(ws_d.max_column, max_img_col + 1)
+        # Determine actual data boundaries based on cell values, formulas and images
+        actual_max_row = 1
+        actual_max_col = 1
+        
+        for (r, c), cell in ws_d._cells.items():
+            if cell.value is not None:
+                if r > actual_max_row:
+                    actual_max_row = r
+                if c > actual_max_col:
+                    actual_max_col = c
+                    
+        for (r, c), cell in ws_f._cells.items():
+            if cell.value is not None:
+                if r > actual_max_row:
+                    actual_max_row = r
+                if c > actual_max_col:
+                    actual_max_col = c
+                    
+        for (img_r, img_c) in images_by_cell.keys():
+            r, c = img_r + 1, img_c + 1
+            if r > actual_max_row:
+                actual_max_row = r
+            if c > actual_max_col:
+                actual_max_col = c
+                
+        for rng in ws_d.merged_cells.ranges:
+            min_col, min_row, max_col, max_row = rng.bounds
+            # Check if this merge range contains any values
+            has_val = False
+            for r in range(min_row, max_row + 1):
+                for c in range(min_col, max_col + 1):
+                    if ws_d.cell(row=r, column=c).value is not None:
+                        has_val = True
+                        break
+                if has_val:
+                    break
+            
+            if has_val:
+                if max_row > actual_max_row:
+                    actual_max_row = max_row
+                if max_col > actual_max_col:
+                    actual_max_col = max_col
 
         sheet_title = name
         if getattr(ws_f, 'sheet_state', 'visible') != 'visible':
@@ -202,14 +250,14 @@ def convert_excel_with_formulas(job_id, job_dir, file_path):
             
         sheet_html = []
         sheet_html.append("<div style='overflow-x: auto; margin-bottom: 20px;'>")
-        sheet_html.append("  <table style='border-collapse: collapse; width: 100%; border: 1px solid rgba(255,255,255,0.1); min-width: 600px;'>")
+        sheet_html.append("  <table class='excel-table'>")
         
         # Header (Column Letters A, B, C...)
         sheet_html.append("    <thead>")
-        sheet_html.append("      <tr style='background-color: rgba(255,255,255,0.05);'>")
-        sheet_html.append("        <th style='border: 1px solid rgba(255,255,255,0.1); padding: 8px; text-align: center; font-weight: bold; width: 40px;'></th>")
+        sheet_html.append("      <tr>")
+        sheet_html.append("        <th class='row-idx'></th>")
         for c in range(1, actual_max_col + 1):
-            sheet_html.append(f"        <th style='border: 1px solid rgba(255,255,255,0.1); padding: 8px; text-align: center; font-weight: bold;'>{get_column_letter(c)}</th>")
+            sheet_html.append(f"        <th>{get_column_letter(c)}</th>")
         sheet_html.append("      </tr>")
         sheet_html.append("    </thead>")
         
@@ -228,7 +276,7 @@ def convert_excel_with_formulas(job_id, job_dir, file_path):
                 
             sheet_html.append("      <tr>")
             # Row index cell
-            sheet_html.append(f"        <td style='border: 1px solid rgba(255,255,255,0.1); padding: 8px; font-weight: bold; background-color: rgba(255,255,255,0.05); text-align: center;'>{r}</td>")
+            sheet_html.append(f"        <td class='row-idx'>{r}</td>")
             
             for c in range(1, actual_max_col + 1):
                 if (r, c) in skip_cells:
@@ -250,12 +298,14 @@ def convert_excel_with_formulas(job_id, job_dir, file_path):
                     text = text + " " + " ".join(imgs) if text else " ".join(imgs)
                 
                 # Style and merges
-                td_style = "border: 1px solid rgba(255,255,255,0.1); padding: 8px; vertical-align: top; white-space: pre-wrap;"
+                td_style = ""
                 color = get_cell_color(cell_d, theme_colors)
                 if color:
                     text_color = get_text_color_for_background(color)
-                    td_style += f" background-color: {color}; color: {text_color};"
+                    td_style = f"background-color: {color}; color: {text_color};"
                     
+                style_attr = f" style='{td_style}'" if td_style else ""
+                
                 merge_attrs = ""
                 if (r, c) in merged_map:
                     rowspan, colspan = merged_map[(r, c)]
@@ -264,7 +314,7 @@ def convert_excel_with_formulas(job_id, job_dir, file_path):
                     if colspan > 1:
                         merge_attrs += f" colspan='{colspan}'"
                 
-                sheet_html.append(f"        <td style='{td_style}'{merge_attrs}>{text}</td>")
+                sheet_html.append(f"        <td{style_attr}{merge_attrs}>{text}</td>")
                 
             sheet_html.append("      </tr>")
             

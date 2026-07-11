@@ -101,32 +101,19 @@
                 </div>
             </div>
 
-            <div class="flex gap-2">
-                <button id="btnSelectFolder" onclick="document.getElementById('folderInput').click()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-xl shadow-lg transition-colors whitespace-nowrap flex items-center gap-2 border border-slate-600">
-                    <i data-lucide="folder-up" class="w-4 h-4"></i> Thư Mục
-                </button>
-                <button id="btnSelectFile" onclick="document.getElementById('fileInput').click()" class="px-6 py-2 bg-violet-600 hover:bg-violet-500 text-white font-medium rounded-xl shadow-lg shadow-violet-900/20 transition-colors whitespace-nowrap">
-                    Chọn File
-                </button>
-            </div>
-        </div>
-
-        <!-- Options Panel -->
-        <div class="glass-panel rounded-2xl p-4 mb-6 flex flex-col sm:flex-row justify-between items-center gap-4 transition-all relative overflow-hidden">
-            <div class="flex items-center gap-3 w-full">
-                <div class="bg-slate-800/80 p-2 rounded-xl">
-                    <i data-lucide="settings-2" class="w-5 h-5 text-violet-400"></i>
-                </div>
-                <div class="flex-1">
-                    <h4 class="text-sm font-semibold text-slate-200">Tùy chọn chuyển đổi (Options)</h4>
-                    <p class="text-slate-400 text-xs">Cấu hình thêm cho các định dạng đặc biệt</p>
-                </div>
-            </div>
-            <div class="flex items-center gap-2 whitespace-nowrap">
-                <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300 hover:text-white transition-colors bg-slate-800/40 hover:bg-slate-800/80 px-4 py-2 rounded-xl border border-slate-700/50">
+            <div class="flex flex-col sm:flex-row items-center gap-3">
+                <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300 hover:text-white transition-colors bg-slate-800/40 hover:bg-slate-800/80 px-4 py-2 rounded-xl border border-slate-700/50 whitespace-nowrap">
                     <input type="checkbox" id="chkExcludeHidden" class="w-4 h-4 rounded border-slate-600 text-violet-600 focus:ring-violet-500 focus:ring-offset-slate-900 bg-slate-800 transition-all">
                     <span>Bỏ qua sheet ẩn (Excel)</span>
                 </label>
+                <div class="flex gap-2">
+                    <button id="btnSelectFolder" onclick="document.getElementById('folderInput').click()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-xl shadow-lg transition-colors whitespace-nowrap flex items-center gap-2 border border-slate-600">
+                        <i data-lucide="folder-up" class="w-4 h-4"></i> Thư Mục
+                    </button>
+                    <button id="btnSelectFile" onclick="document.getElementById('fileInput').click()" class="px-6 py-2 bg-violet-600 hover:bg-violet-500 text-white font-medium rounded-xl shadow-lg shadow-violet-900/20 transition-colors whitespace-nowrap">
+                        Chọn File
+                    </button>
+                </div>
             </div>
         </div>
 

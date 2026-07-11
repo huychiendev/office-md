@@ -8,10 +8,9 @@ Tài liệu này mô tả cấu trúc phân cấp giao diện (UI Tree), các tr
 graph TD
     body[body: p-4/p-8 flex flex-col h-screen] --> header[Header: Tên ứng dụng & Trạng thái xử lý]
     body --> dropzone[Dropzone Panel: Kéo thả file / Chọn File & Thư mục]
-    body --> options[Options Panel: Cấu hình chuyển đổi]
     body --> main[Main: Khu vực hiển thị kết quả]
     
-    options --> chkExcludeHidden[Checkbox: chkExcludeHidden]
+    dropzone --> chkExcludeHidden[Checkbox: chkExcludeHidden]
     
     main --> result_header[Result Header: Tab Preview/Code & Copy/Download]
     main --> result_body[Result Body: Sidebar danh sách file & Vùng hiển thị]

@@ -214,8 +214,15 @@ def check_status(job_id: str):
     if os.path.exists(os.path.join(job_dir, "success.txt")):
         with open(os.path.join(job_dir, "success.txt"), "r") as f:
             md_filename = f.read().strip()
-        with open(os.path.join(job_dir, md_filename), "r", encoding="utf-8") as f:
-            markdown_text = f.read()
+            
+        preview_filename = f"{os.path.splitext(md_filename)[0]}_preview.md"
+        preview_filepath = os.path.join(job_dir, preview_filename)
+        if os.path.exists(preview_filepath):
+            with open(preview_filepath, "r", encoding="utf-8") as f:
+                markdown_text = f.read()
+        else:
+            with open(os.path.join(job_dir, md_filename), "r", encoding="utf-8") as f:
+                markdown_text = f.read()
         zip_path = os.path.join(os.path.dirname(job_dir), f"{job_id}_archive.zip")
         if os.path.exists(zip_path):
             download_url = f"/static/conversions/{job_id}_archive.zip"

@@ -49,13 +49,13 @@ sequenceDiagram
     rect rgb(20, 20, 30)
         Note over API, Worker: Chạy ngầm trong Thread & Subprocess
         API->>Worker: python worker.py <job_id> <job_dir> <file_path> <filename> [--exclude-hidden-sheets]
-        Worker->>Worker: Đọc Excel, kiểm tra sheet_state nếu có flag
+        Worker->>Worker: Đọc Excel, tạo bản preview (giới hạn 100 dòng) và bản full
         Worker-->>API: Ghi file kết quả md/zip & success.txt / error.txt
     end
     
     loop Kiểm tra Trạng thái (Polling mỗi 2 giây)
         UI->>API: GET /api/status/{job_id}
-        API-->>UI: Trả về trạng thái hiện tại (completed / processing / error)
+        API-->>UI: Trả về trạng thái hiện tại (completed / processing / error), ưu tiên trả về nội dung preview
     end
     
     UI->>UI: Tắt màn hình chờ, hiển thị kết quả (Markdown/HTML Preview)

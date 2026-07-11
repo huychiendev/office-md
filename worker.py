@@ -127,6 +127,7 @@ def convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheet
     wb_formula = load_workbook(file_path, data_only=False, read_only=False)
     theme_colors = get_theme_colors(wb_formula)
     parts = [style_block]
+    parts_preview = [style_block]
 
     for name in wb_formula.sheetnames:
         ws_d, ws_f = wb_data[name], wb_formula[name]
@@ -237,6 +238,7 @@ def convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheet
         if getattr(ws_f, 'sheet_state', 'visible') != 'visible':
             sheet_title += " (sheet ẩn)"
         parts.append(f"## {sheet_title}\n")
+        parts_preview.append(f"## {sheet_title}\n")
         
         # Check if there is any data or merge cells or images in the sheet to prevent rendering empty sheets
         has_any_data = False
@@ -252,20 +254,26 @@ def convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheet
             continue
             
         sheet_html = []
-        sheet_html.append("<div style='overflow-x: auto; margin-bottom: 20px;'>")
-        sheet_html.append("  <table class='excel-table'>")
+        sheet_html_preview = []
         
-        # Header (Column Letters A, B, C...)
-        sheet_html.append("    <thead>")
-        sheet_html.append("      <tr>")
-        sheet_html.append("        <th class='row-idx'></th>")
+        header_html = []
+        header_html.append("<div style='overflow-x: auto; margin-bottom: 20px;'>")
+        header_html.append("  <table class='excel-table'>")
+        header_html.append("    <thead>")
+        header_html.append("      <tr>")
+        header_html.append("        <th class='row-idx'></th>")
         for c in range(1, actual_max_col + 1):
-            sheet_html.append(f"        <th>{get_column_letter(c)}</th>")
-        sheet_html.append("      </tr>")
-        sheet_html.append("    </thead>")
+            header_html.append(f"        <th>{get_column_letter(c)}</th>")
+        header_html.append("      </tr>")
+        header_html.append("    </thead>")
+        header_html.append("    <tbody>")
         
-        # Body (Rows 1, 2, 3...)
-        sheet_html.append("    <tbody>")
+        header_str = "\n".join(header_html)
+        sheet_html.append(header_str)
+        sheet_html_preview.append(header_str)
+        
+        rendered_rows_count = 0
+        preview_truncated = False
         
         for r in range(1, actual_max_row + 1):
             row_has_data = False
@@ -277,9 +285,9 @@ def convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheet
             if not row_has_data:
                 continue
                 
-            sheet_html.append("      <tr>")
-            # Row index cell
-            sheet_html.append(f"        <td class='row-idx'>{r}</td>")
+            row_html = []
+            row_html.append("      <tr>")
+            row_html.append(f"        <td class='row-idx'>{r}</td>")
             
             for c in range(1, actual_max_col + 1):
                 if (r, c) in skip_cells:
@@ -317,27 +325,48 @@ def convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheet
                     if colspan > 1:
                         merge_attrs += f" colspan='{colspan}'"
                 
-                sheet_html.append(f"        <td{style_attr}{merge_attrs}>{text}</td>")
+                row_html.append(f"        <td{style_attr}{merge_attrs}>{text}</td>")
                 
-            sheet_html.append("      </tr>")
+            row_html.append("      </tr>")
+            row_str = "\n".join(row_html)
             
-        sheet_html.append("    </tbody>")
-        sheet_html.append("  </table>")
-        sheet_html.append("</div>\n")
+            # Ghi vào bản full
+            sheet_html.append(row_str)
+            
+            # Ghi vào bản preview nếu chưa vượt quá 100 dòng
+            if rendered_rows_count < 100:
+                sheet_html_preview.append(row_str)
+                rendered_rows_count += 1
+            elif not preview_truncated:
+                cols_span = actual_max_col + 1
+                trunc_msg = f"      <tr><td colspan='{cols_span}' style='text-align: center; font-style: italic; color: #94a3b8; background-color: rgba(255,255,255,0.02); padding: 12px;'>... Đã ẩn bớt các dòng từ đây để tránh lag trình duyệt. Vui lòng tải file về để xem đầy đủ dữ liệu ...</td></tr>"
+                sheet_html_preview.append(trunc_msg)
+                preview_truncated = True
+            
+        footer_html = []
+        footer_html.append("    </tbody>")
+        footer_html.append("  </table>")
+        footer_html.append("</div>\n")
+        footer_str = "\n".join(footer_html)
+        
+        sheet_html.append(footer_str)
+        sheet_html_preview.append(footer_str)
         
         parts.append("\n".join(sheet_html))
+        parts_preview.append("\n".join(sheet_html_preview))
 
     wb_data.close()
     wb_formula.close()
-    return '\n'.join(parts)
+    return '\n'.join(parts), '\n'.join(parts_preview)
 
 
 def convert_file(job_id, job_dir, file_path, filename, exclude_hidden_sheets=False):
     """Core conversion logic -- runs in isolated process."""
     markdown_text = ""
+    markdown_preview = ""
 
     if filename.lower().endswith(('.xlsx', '.xlsm', '.xltx', '.xltm')):
-        markdown_text = convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheets)
+        markdown_text, markdown_preview = convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheets)
     else:
         # Only import MarkItDown here -- keeps main server process lean
         from markitdown import MarkItDown
@@ -346,6 +375,7 @@ def convert_file(job_id, job_dir, file_path, filename, exclude_hidden_sheets=Fal
         markdown_text = result.text_content
         markdown_text = re.sub(r'\bNaN\b', '', markdown_text)
         markdown_text = re.sub(r'Unnamed:\s*\d+', '', markdown_text)
+        markdown_preview = markdown_text
 
     # VBA macros
     office_exts = ('doc', 'docx', 'docm', 'dot', 'dotx', 'dotm',
@@ -355,6 +385,7 @@ def convert_file(job_id, job_dir, file_path, filename, exclude_hidden_sheets=Fal
         vba_text = _extract_vba_macros(file_path)
         if vba_text:
             markdown_text += vba_text
+            markdown_preview += vba_text
 
     # PPTX images
     if filename.lower().endswith('.pptx'):
@@ -391,10 +422,11 @@ def convert_file(job_id, job_dir, file_path, filename, exclude_hidden_sheets=Fal
 
                     encoded_filename = urllib.parse.quote(save_name)
                     markdown_text = markdown_text.replace(f"]({placeholder})", f"]({encoded_filename})", 1)
+                    markdown_preview = markdown_preview.replace(f"]({placeholder})", f"]({encoded_filename})", 1)
         except Exception as e:
             print(f"Error extracting PPTX images: {e}")
 
-    return markdown_text
+    return markdown_text, markdown_preview
 
 
 def main():
@@ -408,7 +440,7 @@ def main():
     exclude_hidden_sheets = "--exclude-hidden-sheets" in flags
 
     try:
-        markdown_text = convert_file(job_id, job_dir, file_path, filename, exclude_hidden_sheets)
+        markdown_text, markdown_preview = convert_file(job_id, job_dir, file_path, filename, exclude_hidden_sheets)
 
         md_filename = f"{os.path.splitext(filename)[0]}.md"
         md_filepath = os.path.join(job_dir, md_filename)
@@ -416,6 +448,13 @@ def main():
         
         with open(md_filepath, "w", encoding="utf-8") as f:
             f.write(markdown_text)
+
+        # Save preview version if it differs from full version
+        if markdown_preview != markdown_text:
+            preview_filename = f"{os.path.splitext(filename)[0]}_preview.md"
+            preview_filepath = os.path.join(job_dir, preview_filename)
+            with open(preview_filepath, "w", encoding="utf-8") as f:
+                f.write(markdown_preview)
 
         if not is_batch:
             import shutil

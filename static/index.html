@@ -20,7 +20,6 @@
             backdrop-filter: blur(12px);
             -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
         }
         .drag-active {
             border-color: #8b5cf6 !important;
@@ -39,7 +38,7 @@
         .markdown-body h1 { font-size: 2em; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.3em; }
         .markdown-body h2 { font-size: 1.5em; }
         .markdown-body a { color: #a78bfa; text-decoration: none; }
-        .markdown-body img { max-width: 100%; border-radius: 8px; margin: 1em 0; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .markdown-body img { max-width: 100%; border-radius: 8px; margin: 1em 0; }
         .markdown-body pre { background: #0f172a; padding: 1em; border-radius: 8px; overflow-x: auto; border: 1px solid rgba(255,255,255,0.05); }
         .markdown-body code { font-family: monospace; background: rgba(255,255,255,0.1); padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.9em; }
         .markdown-body pre code { background: transparent; padding: 0; }
@@ -75,7 +74,7 @@
             
             <!-- Left: Logo & Title -->
             <div class="flex items-center gap-3 shrink-0 w-full lg:w-auto">
-                <div class="p-2 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-lg shadow-lg">
+                <div class="p-2 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-lg">
                     <i data-lucide="file-type-2" class="text-white w-6 h-6"></i>
                 </div>
                 <div>
@@ -107,10 +106,10 @@
                     <span>Bỏ qua sheet ẩn (Excel)</span>
                 </label>
                 <div class="flex gap-2">
-                    <button id="btnSelectFolder" onclick="document.getElementById('folderInput').click()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium rounded-xl shadow-lg transition-colors whitespace-nowrap flex items-center gap-2 border border-slate-600">
+                    <button id="btnSelectFolder" onclick="document.getElementById('folderInput').click()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium rounded-xl transition-colors whitespace-nowrap flex items-center gap-2 border border-slate-600">
                         <i data-lucide="folder-up" class="w-4 h-4"></i> Thư Mục
                     </button>
-                    <button id="btnSelectFile" onclick="document.getElementById('fileInput').click()" class="px-6 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-xl shadow-lg shadow-violet-900/20 transition-colors whitespace-nowrap">
+                    <button id="btnSelectFile" onclick="document.getElementById('fileInput').click()" class="px-6 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-xl transition-colors whitespace-nowrap">
                         Chọn File
                     </button>
                 </div>

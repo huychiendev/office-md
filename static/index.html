@@ -68,54 +68,54 @@
 <body class="p-4 md:p-8 flex flex-col h-screen">
     
     <div class="w-full h-full flex flex-col">
-        <header class="flex justify-between items-center mb-8">
-            <div class="flex items-center gap-3">
+        <!-- Unified Header & Dropzone Panel -->
+        <header class="glass-panel rounded-2xl p-4 mb-6 flex flex-col lg:flex-row justify-between items-center gap-4 border-dashed border-2 border-slate-600 transition-all relative overflow-hidden" id="dropzone">
+            <input type="file" id="fileInput" class="hidden" accept=".pptx,.docx,.xlsx,.xlsm,.pdf,.html,.csv,.json,.xml">
+            <input type="file" id="folderInput" class="hidden" webkitdirectory directory multiple>
+            
+            <!-- Left: Logo & Title -->
+            <div class="flex items-center gap-3 shrink-0 w-full lg:w-auto">
                 <div class="p-2 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-lg shadow-lg">
                     <i data-lucide="file-type-2" class="text-white w-6 h-6"></i>
                 </div>
                 <div>
-                    <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-violet-400 to-indigo-400">Office to Markdown Converter</h1>
-                    <p class="text-sm text-slate-400">Convert Any Document to Markdown</p>
+                    <h1 class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-violet-400 to-indigo-400 whitespace-nowrap">Office to Markdown</h1>
+                    <p class="text-xs text-slate-400">Convert Any Document to Markdown</p>
                 </div>
             </div>
-            <div>
+
+            <!-- Middle: Upload State -->
+            <div class="flex items-center gap-3 flex-1 min-w-0 w-full lg:w-auto" id="uploadState">
+                <div class="bg-slate-800/80 p-2 rounded-xl transition-transform" id="stateIcon">
+                    <i data-lucide="upload-cloud" class="w-5 h-5 text-violet-400"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <h3 class="text-sm font-semibold truncate" id="stateTitle">Tải lên (Upload)</h3>
+                    <p class="text-slate-400 text-xs truncate" id="stateDesc">Kéo thả file vào đây. Hỗ trợ PPTX, Excel, Word, PDF...</p>
+                </div>
+            </div>
+
+            <!-- Right: Actions & Options -->
+            <div class="flex flex-col sm:flex-row items-center gap-3 shrink-0 w-full lg:w-auto justify-end">
                 <span id="progressBadge" class="hidden inline-flex items-center gap-2 px-3 py-1 text-xs font-medium bg-violet-500/20 text-violet-400 border border-violet-500/30 rounded-full">
                     <div class="animate-spin rounded-full h-3 w-3 border-2 border-violet-400 border-t-transparent"></div>
                     <span id="progressText">Đang xử lý...</span>
                 </span>
-            </div>
-        </header>
-
-        <!-- Compact Unified Top Bar -->
-        <div class="glass-panel rounded-2xl p-4 mb-6 flex flex-col sm:flex-row justify-between items-center gap-4 border-dashed border-2 border-slate-600 transition-all relative overflow-hidden" id="dropzone">
-            <input type="file" id="fileInput" class="hidden" accept=".pptx,.docx,.xlsx,.xlsm,.pdf,.html,.csv,.json,.xml">
-            <input type="file" id="folderInput" class="hidden" webkitdirectory directory multiple>
-            
-            <div class="flex items-center gap-4 w-full" id="uploadState">
-                <div class="bg-slate-800/80 p-3 rounded-xl transition-transform" id="stateIcon">
-                    <i data-lucide="upload-cloud" class="w-6 h-6 text-violet-400"></i>
-                </div>
-                <div class="flex-1">
-                    <h3 class="text-lg font-semibold" id="stateTitle">Tải lên (Upload)</h3>
-                    <p class="text-slate-400 text-sm" id="stateDesc">Kéo thả file vào đây. Hỗ trợ PPTX (có ảnh), Excel, Word, PDF...</p>
-                </div>
-            </div>
-
-            <div class="flex flex-col sm:flex-row items-center gap-3">
-                <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300 hover:text-white transition-colors bg-slate-800/40 hover:bg-slate-800/80 px-4 py-2 rounded-xl border border-slate-700/50 whitespace-nowrap">
+                
+                <label class="flex items-center gap-2 cursor-pointer text-xs text-slate-300 hover:text-white transition-colors bg-slate-800/40 hover:bg-slate-800/80 px-3 py-2 rounded-xl border border-slate-700/50 whitespace-nowrap">
                     <input type="checkbox" id="chkExcludeHidden" class="w-4 h-4 rounded border-slate-600 text-violet-600 focus:ring-violet-500 focus:ring-offset-slate-900 bg-slate-800 transition-all">
                     <span>Bỏ qua sheet ẩn (Excel)</span>
                 </label>
                 <div class="flex gap-2">
-                    <button id="btnSelectFolder" onclick="document.getElementById('folderInput').click()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-xl shadow-lg transition-colors whitespace-nowrap flex items-center gap-2 border border-slate-600">
+                    <button id="btnSelectFolder" onclick="document.getElementById('folderInput').click()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium rounded-xl shadow-lg transition-colors whitespace-nowrap flex items-center gap-2 border border-slate-600">
                         <i data-lucide="folder-up" class="w-4 h-4"></i> Thư Mục
                     </button>
-                    <button id="btnSelectFile" onclick="document.getElementById('fileInput').click()" class="px-6 py-2 bg-violet-600 hover:bg-violet-500 text-white font-medium rounded-xl shadow-lg shadow-violet-900/20 transition-colors whitespace-nowrap">
+                    <button id="btnSelectFile" onclick="document.getElementById('fileInput').click()" class="px-6 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-xl shadow-lg shadow-violet-900/20 transition-colors whitespace-nowrap">
                         Chọn File
                     </button>
                 </div>
             </div>
-        </div>
+        </header>
 
     <main class="flex-1 flex flex-col min-h-0">
         <!-- Result Section -->

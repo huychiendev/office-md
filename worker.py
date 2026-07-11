@@ -31,7 +31,7 @@ def _extract_vba_macros(file_path):
         return ""
 
 
-def convert_excel_with_formulas(job_id, job_dir, file_path):
+def convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheets=False):
     import colorsys
     from openpyxl import load_workbook
     from openpyxl.utils import get_column_letter
@@ -130,6 +130,9 @@ def convert_excel_with_formulas(job_id, job_dir, file_path):
 
     for name in wb_formula.sheetnames:
         ws_d, ws_f = wb_data[name], wb_formula[name]
+        
+        if exclude_hidden_sheets and getattr(ws_f, 'sheet_state', 'visible') != 'visible':
+            continue
         
         # Build merged cells map
         merged_ranges = ws_d.merged_cells.ranges
@@ -329,12 +332,12 @@ def convert_excel_with_formulas(job_id, job_dir, file_path):
     return '\n'.join(parts)
 
 
-def convert_file(job_id, job_dir, file_path, filename):
+def convert_file(job_id, job_dir, file_path, filename, exclude_hidden_sheets=False):
     """Core conversion logic -- runs in isolated process."""
     markdown_text = ""
 
     if filename.lower().endswith(('.xlsx', '.xlsm', '.xltx', '.xltm')):
-        markdown_text = convert_excel_with_formulas(job_id, job_dir, file_path)
+        markdown_text = convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheets)
     else:
         # Only import MarkItDown here -- keeps main server process lean
         from markitdown import MarkItDown
@@ -400,10 +403,12 @@ def main():
         sys.exit(1)
 
     job_id, job_dir, file_path, filename = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-    is_batch = len(sys.argv) > 5 and sys.argv[5] == "--batch"
+    flags = sys.argv[5:]
+    is_batch = "--batch" in flags
+    exclude_hidden_sheets = "--exclude-hidden-sheets" in flags
 
     try:
-        markdown_text = convert_file(job_id, job_dir, file_path, filename)
+        markdown_text = convert_file(job_id, job_dir, file_path, filename, exclude_hidden_sheets)
 
         md_filename = f"{os.path.splitext(filename)[0]}.md"
         md_filepath = os.path.join(job_dir, md_filename)

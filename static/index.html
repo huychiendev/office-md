@@ -111,6 +111,25 @@
             </div>
         </div>
 
+        <!-- Options Panel -->
+        <div class="glass-panel rounded-2xl p-4 mb-6 flex flex-col sm:flex-row justify-between items-center gap-4 transition-all relative overflow-hidden">
+            <div class="flex items-center gap-3 w-full">
+                <div class="bg-slate-800/80 p-2 rounded-xl">
+                    <i data-lucide="settings-2" class="w-5 h-5 text-violet-400"></i>
+                </div>
+                <div class="flex-1">
+                    <h4 class="text-sm font-semibold text-slate-200">Tùy chọn chuyển đổi (Options)</h4>
+                    <p class="text-slate-400 text-xs">Cấu hình thêm cho các định dạng đặc biệt</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 whitespace-nowrap">
+                <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300 hover:text-white transition-colors bg-slate-800/40 hover:bg-slate-800/80 px-4 py-2 rounded-xl border border-slate-700/50">
+                    <input type="checkbox" id="chkExcludeHidden" class="w-4 h-4 rounded border-slate-600 text-violet-600 focus:ring-violet-500 focus:ring-offset-slate-900 bg-slate-800 transition-all">
+                    <span>Bỏ qua sheet ẩn (Excel)</span>
+                </label>
+            </div>
+        </div>
+
     <main class="flex-1 flex flex-col min-h-0">
         <!-- Result Section -->
         <div class="w-full h-full glass-panel rounded-2xl flex flex-col overflow-hidden relative">
@@ -354,7 +373,8 @@
                 formData.append(isBatch ? 'files' : 'file', f, filename);
             });
             
-            const endpoint = isBatch ? '/api/convert_batch' : '/api/convert';
+            const excludeHidden = document.getElementById('chkExcludeHidden').checked;
+            const endpoint = `${isBatch ? '/api/convert_batch' : '/api/convert'}?exclude_hidden_sheets=${excludeHidden}`;
 
             try {
                 const response = await fetch(endpoint, {

@@ -100,7 +100,7 @@ def serve_index():
 
 
 @app.post("/api/convert")
-def convert_file(file: UploadFile = File(...)):
+def convert_file(file: UploadFile = File(...), exclude_hidden_sheets: bool = False):
     cleanup_old_jobs()
 
     job_id = str(uuid.uuid4())
@@ -116,7 +116,10 @@ def convert_file(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, f)
 
         # Spawn worker in a background thread (thread is cheap, the heavy work is in subprocess)
-        t = threading.Thread(target=_run_worker, args=(job_dir, [job_id, job_dir, file_path, safe_filename]))
+        args = [job_id, job_dir, file_path, safe_filename]
+        if exclude_hidden_sheets:
+            args.append("--exclude-hidden-sheets")
+        t = threading.Thread(target=_run_worker, args=(job_dir, args))
         t.daemon = True
         t.start()
 
@@ -127,7 +130,7 @@ def convert_file(file: UploadFile = File(...)):
 
 
 @app.post("/api/convert_batch")
-def convert_batch(files: List[UploadFile] = File(...)):
+def convert_batch(files: List[UploadFile] = File(...), exclude_hidden_sheets: bool = False):
     cleanup_old_jobs()
 
     job_id = str(uuid.uuid4())
@@ -151,8 +154,12 @@ def convert_batch(files: List[UploadFile] = File(...)):
                 fp, fn = entry["path"], entry["name"]
                 # Run each file in its own subprocess for maximum memory isolation
                 try:
+                    cmd = ["python", "worker.py", job_id, job_dir, fp, fn]
+                    if exclude_hidden_sheets:
+                        cmd.append("--exclude-hidden-sheets")
+                    cmd.append("--batch")
                     res = subprocess.run(
-                        ["python", "worker.py", job_id, job_dir, fp, fn, "--batch"],
+                        cmd,
                         timeout=300, capture_output=True, text=True
                     )
                     if res.returncode != 0:

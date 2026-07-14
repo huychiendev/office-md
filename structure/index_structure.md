@@ -58,6 +58,9 @@ sequenceDiagram
     end
     
     UI->>UI: Tắt màn hình chờ, hiển thị kết quả (Markdown/HTML Preview)
+    UI->>API: Pre-fetch file (ZIP/MD) về dưới dạng Blob
+    API-->>UI: Trả về binary data
+    UI->>UI: Tạo Blob URL, gắn vào nút Download (tránh 404 khi server cleanup)
     UI->>User: Kích hoạt nút Copy và Download
 ```
 

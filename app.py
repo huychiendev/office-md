@@ -7,6 +7,7 @@ import threading
 import urllib.parse
 import mimetypes
 import datetime
+import zipfile
 from typing import List
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
@@ -67,6 +68,39 @@ def cleanup_old_jobs(directory="static/conversions", max_size_mb=100):
                     break
     except Exception as e:
         print(f"Cleanup error: {e}")
+
+
+def create_clean_zip(job_dir, zip_name, preview_mode=False):
+    """Create a zip of the conversion outputs, omitting raw input files and logs."""
+    zip_path = os.path.join("static/conversions", zip_name)
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
+        for root, dirs, files in os.walk(job_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                rel_path = os.path.relpath(file_path, job_dir)
+                
+                # Omit raw files, temporary text and json logs
+                if file.lower().endswith(('.xlsx', '.xlsm', '.docx', '.pptx', '.pdf', '.txt', '.json', '.html', '.xml', '.csv')):
+                    continue
+                    
+                # Preview mode zip packaging
+                if preview_mode:
+                    if "_preview.md" in file:
+                        new_rel_path = rel_path.replace("_preview.md", ".md")
+                        z.write(file_path, new_rel_path)
+                    elif file.endswith(".md"):
+                        # If a .md file has no preview equivalent, it was too short to truncate. Use original.
+                        preview_file = file.replace(".md", "_preview.md")
+                        if not os.path.exists(os.path.join(root, preview_file)):
+                            z.write(file_path, rel_path)
+                    elif file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                        z.write(file_path, rel_path)
+                # Full mode zip packaging
+                else:
+                    if "_preview.md" in file:
+                        continue
+                    if file.endswith(".md") or file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                        z.write(file_path, rel_path)
 
 
 def _run_worker(job_dir, args):
@@ -192,13 +226,27 @@ def convert_batch(files: List[UploadFile] = File(...), exclude_hidden_sheets: bo
                 # Read result
                 md_filename = f"{os.path.splitext(fn)[0]}.md"
                 md_path = os.path.join(job_dir, md_filename)
+                preview_filename = f"{os.path.splitext(fn)[0]}_preview.md"
+                preview_path = os.path.join(job_dir, preview_filename)
+                
                 if os.path.exists(md_path):
                     with open(md_path, "r", encoding="utf-8") as f:
-                        results_data.append({"filename": fn, "markdown": f.read()})
+                        markdown_full = f.read()
+                    
+                    markdown_preview = markdown_full
+                    if os.path.exists(preview_path):
+                        with open(preview_path, "r", encoding="utf-8") as f:
+                            markdown_preview = f.read()
+                            
+                    results_data.append({
+                        "filename": fn,
+                        "markdown": markdown_full,
+                        "markdown_preview": markdown_preview
+                    })
 
-            # Create ZIP
-            zip_path = f"static/conversions/{job_id}_archive"
-            shutil.make_archive(zip_path, 'zip', job_dir)
+            # Create clean ZIPs
+            create_clean_zip(job_dir, f"{job_id}_archive.zip", preview_mode=False)
+            create_clean_zip(job_dir, f"{job_id}_archive_preview.zip", preview_mode=True)
 
             # Write batch success
             with open(os.path.join(job_dir, "success.json"), "w", encoding="utf-8") as f:
@@ -230,7 +278,8 @@ def check_status(job_id: str):
         return {
             "success": True, "status": "completed",
             "results": results_data,
-            "download_url": f"/static/conversions/{job_id}_archive.zip"
+            "download_filename": f"{job_id}_archive.zip",
+            "is_zip": True
         }
 
     if os.path.exists(os.path.join(job_dir, "success.txt")):
@@ -239,29 +288,65 @@ def check_status(job_id: str):
             
         preview_filename = f"{os.path.splitext(md_filename)[0]}_preview.md"
         preview_filepath = os.path.join(job_dir, preview_filename)
+        
+        with open(os.path.join(job_dir, md_filename), "r", encoding="utf-8") as f:
+            markdown_full = f.read()
+            
+        markdown_preview = markdown_full
         if os.path.exists(preview_filepath):
             with open(preview_filepath, "r", encoding="utf-8") as f:
-                markdown_text = f.read()
-        else:
-            with open(os.path.join(job_dir, md_filename), "r", encoding="utf-8") as f:
-                markdown_text = f.read()
-        zip_path = os.path.join(os.path.dirname(job_dir), f"{job_id}_archive.zip")
-        if os.path.exists(zip_path):
-            download_url = f"/static/conversions/{job_id}_archive.zip"
+                markdown_preview = f.read()
+                
+        # Create ZIPs if images are present
+        has_images = any(f.endswith(('.png', '.jpg', '.jpeg', '.gif')) for f in os.listdir(job_dir))
+        if has_images:
+            create_clean_zip(job_dir, f"{job_id}_archive.zip", preview_mode=False)
+            create_clean_zip(job_dir, f"{job_id}_archive_preview.zip", preview_mode=True)
+            download_filename = f"{job_id}_archive.zip"
             is_zip = True
         else:
-            download_url = f"/static/conversions/{job_id}/{md_filename}"
+            download_filename = md_filename
             is_zip = False
             
         return {
             "success": True, "status": "completed",
-            "markdown": markdown_text,
+            "markdown": markdown_full,
+            "markdown_preview": markdown_preview,
             "filename_md": md_filename,
-            "download_url": download_url,
+            "download_filename": download_filename,
             "is_zip": is_zip
         }
 
     return {"success": True, "status": "processing"}
+
+
+@app.get("/api/download/{job_id}/{filename}")
+def download_file(job_id: str, filename: str, preview: bool = False):
+    job_dir = f"static/conversions/{job_id}"
+    
+    # 1. ZIP File Download
+    if filename.endswith(".zip"):
+        zip_name = f"{job_id}_archive_preview.zip" if preview else f"{job_id}_archive.zip"
+        zip_path = os.path.join("static/conversions", zip_name)
+        if os.path.exists(zip_path):
+            return FileResponse(zip_path, filename=filename, media_type="application/zip")
+        fallback_path = os.path.join("static/conversions", f"{job_id}_archive.zip")
+        if os.path.exists(fallback_path):
+            return FileResponse(fallback_path, filename=filename, media_type="application/zip")
+        return JSONResponse(status_code=404, content={"error": "File ZIP not found"})
+        
+    # 2. Markdown File Download
+    md_name = filename
+    if preview:
+        preview_name = f"{os.path.splitext(filename)[0]}_preview.md"
+        if os.path.exists(os.path.join(job_dir, preview_name)):
+            md_name = preview_name
+            
+    file_path = os.path.join(job_dir, md_name)
+    if os.path.exists(file_path):
+        return FileResponse(file_path, filename=filename, media_type="text/markdown")
+        
+    return JSONResponse(status_code=404, content={"error": "File MD not found"})
 
 
 if __name__ == "__main__":

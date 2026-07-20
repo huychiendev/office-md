@@ -105,6 +105,10 @@
                     <input type="checkbox" id="chkExcludeHidden" class="w-4 h-4 rounded border-slate-600 text-violet-600 focus:ring-violet-500 focus:ring-offset-slate-900 bg-slate-800 transition-all">
                     <span>Bỏ qua sheet ẩn (Excel)</span>
                 </label>
+                <label class="flex items-center gap-2 cursor-pointer text-xs text-slate-300 hover:text-white transition-colors bg-slate-800/40 hover:bg-slate-800/80 px-3 py-2 rounded-xl border border-slate-700/50 whitespace-nowrap">
+                    <input type="checkbox" id="chkLimitRows" class="w-4 h-4 rounded border-slate-600 text-violet-600 focus:ring-violet-500 focus:ring-offset-slate-900 bg-slate-800 transition-all">
+                    <span>Rút gọn (100 dòng đầu)</span>
+                </label>
                 <div class="flex gap-2">
                     <button id="btnSelectFolder" onclick="document.getElementById('folderInput').click()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium rounded-xl transition-colors whitespace-nowrap flex items-center gap-2 border border-slate-600">
                         <i data-lucide="folder-up" class="w-4 h-4"></i> Thư Mục
@@ -187,8 +191,37 @@
         const progressText = document.getElementById('progressText');
 
         let currentMarkdown = '';
+        let currentMarkdownFull = '';
+        let currentMarkdownPreview = '';
         let currentResults = [];
         let currentJobId = '';
+        let currentDownloadFilename = '';
+        let currentIsZip = false;
+        let currentActiveFileIndex = 0;
+
+        function updateDisplay() {
+            const limitRows = document.getElementById('chkLimitRows').checked;
+            
+            // 1. Update preview content
+            if (currentResults.length > 0) {
+                const activeFile = currentResults[currentActiveFileIndex];
+                if (activeFile) {
+                    renderContent(limitRows ? activeFile.markdown_preview : activeFile.markdown);
+                }
+            } else if (currentMarkdownFull) {
+                renderContent(limitRows ? currentMarkdownPreview : currentMarkdownFull);
+            }
+            
+            // 2. Update Download button dynamic URL
+            if (currentJobId && currentDownloadFilename) {
+                const downloadUrl = `/api/download/${currentJobId}/${currentDownloadFilename}?preview=${limitRows}`;
+                btnDownload.href = downloadUrl;
+            }
+        }
+
+        document.getElementById('chkLimitRows').addEventListener('change', () => {
+            updateDisplay();
+        });
 
         // UI Toggles
         btnPreview.addEventListener('click', () => {
@@ -319,6 +352,7 @@
         }
         
         function selectFile(index) {
+            currentActiveFileIndex = index;
             // Update active state in sidebar
             document.querySelectorAll('.file-item').forEach((el, i) => {
                 if (i === index) {
@@ -329,7 +363,7 @@
                     el.classList.add('border-transparent', 'hover:bg-slate-800/50');
                 }
             });
-            renderContent(currentResults[index].markdown);
+            updateDisplay();
         }
 
         async function handleFiles(files, isBatch) {
@@ -413,8 +447,13 @@
                     dropzone.classList.remove('pointer-events-none', 'opacity-80');
                     lucide.createIcons();
 
+                    currentDownloadFilename = data.download_filename;
+                    currentIsZip = data.is_zip;
+                    
                     if (isBatch && data.results && data.results.length > 0) {
                         currentResults = data.results;
+                        currentMarkdownFull = '';
+                        currentMarkdownPreview = '';
                         fileSidebar.classList.remove('hidden');
                         fileList.innerHTML = '';
                         currentResults.forEach((res, idx) => {
@@ -427,7 +466,10 @@
                         });
                         selectFile(0);
                     } else {
-                        renderContent(data.markdown);
+                        currentResults = [];
+                        currentMarkdownFull = data.markdown;
+                        currentMarkdownPreview = data.markdown_preview || data.markdown;
+                        updateDisplay();
                     }
                     
                     // Show current active tab
@@ -439,29 +481,18 @@
 
                     // Enable buttons
                     btnCopy.disabled = false;
-                    const isZipDownload = isBatch || data.is_zip;
-                    const dlName = isZipDownload
+                    const dlName = currentIsZip
                         ? (isBatch ? 'archive.zip' : (data.filename_md ? data.filename_md.replace('.md', '.zip') : 'archive.zip'))
                         : (data.filename_md || 'document.md');
 
-                    // Pre-fetch file as blob to avoid 404 when server cleans up
-                    try {
-                        const dlRes = await fetch(data.download_url);
-                        if (dlRes.ok) {
-                            const blob = await dlRes.blob();
-                            btnDownload.href = URL.createObjectURL(blob);
-                        } else {
-                            btnDownload.href = data.download_url;
-                        }
-                    } catch {
-                        btnDownload.href = data.download_url;
-                    }
                     btnDownload.setAttribute('download', dlName);
                     btnDownload.classList.remove('pointer-events-none', 'opacity-50');
-                    btnDownload.innerHTML = isZipDownload
+                    btnDownload.innerHTML = currentIsZip
                         ? '<i data-lucide="folder-down" class="w-4 h-4 inline mr-1"></i> Download (ZIP)'
                         : '<i data-lucide="download" class="w-4 h-4 inline mr-1"></i> Download .md';
                     lucide.createIcons();
+                    
+                    updateDisplay();
 
                 } else {
                     throw new Error(data.error || 'Unknown error');

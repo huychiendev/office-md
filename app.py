@@ -6,9 +6,10 @@ import subprocess
 import threading
 import urllib.parse
 import mimetypes
+import datetime
 from typing import List
 from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -93,10 +94,30 @@ def _run_worker(job_dir, args):
                 f.write(str(e))
 
 
+_cached_index_html = None
+
 @app.head("/")
 @app.get("/")
 def serve_index():
-    return FileResponse("static/index.html")
+    global _cached_index_html
+    if _cached_index_html is None:
+        files_to_check = ["app.py", "worker.py", "static/index.html"]
+        last_update = 0
+        for f in files_to_check:
+            if os.path.exists(f):
+                last_update = max(last_update, os.path.getmtime(f))
+        
+        dt = datetime.datetime.fromtimestamp(last_update)
+        build_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        try:
+            with open("static/index.html", "r", encoding="utf-8") as file:
+                content = file.read()
+            _cached_index_html = content.replace("{{LAST_UPDATE}}", build_time_str)
+        except Exception:
+            return FileResponse("static/index.html")
+            
+    return HTMLResponse(content=_cached_index_html)
 
 
 @app.post("/api/convert")

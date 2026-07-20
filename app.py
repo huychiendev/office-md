@@ -107,8 +107,9 @@ def serve_index():
             if os.path.exists(f):
                 last_update = max(last_update, os.path.getmtime(f))
         
-        dt = datetime.datetime.fromtimestamp(last_update)
-        build_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+        tz_vn = datetime.timezone(datetime.timedelta(hours=7))
+        dt = datetime.datetime.fromtimestamp(last_update, tz=tz_vn)
+        build_time_str = dt.strftime("%Y-%m-%d %H:%M:%S (GMT+7)")
         
         try:
             with open("static/index.html", "r", encoding="utf-8") as file:

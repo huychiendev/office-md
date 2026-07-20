@@ -129,7 +129,7 @@ def convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheet
     parts = [style_block]
     parts_preview = [style_block]
 
-    for name in wb_formula.sheetnames:
+    for sheet_idx, name in enumerate(wb_formula.sheetnames):
         ws_d, ws_f = wb_data[name], wb_formula[name]
         
         if exclude_hidden_sheets and getattr(ws_f, 'sheet_state', 'visible') != 'visible':
@@ -253,12 +253,45 @@ def convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheet
         if not has_any_data:
             continue
             
+        # Đếm tần suất màu để tìm màu chủ đạo của sheet
+        from collections import Counter
+        color_counter = Counter()
+        
+        for r in range(1, actual_max_row + 1):
+            row_has_data = False
+            for c in range(1, actual_max_col + 1):
+                if ws_d.cell(row=r, column=c).value is not None or (r - 1, c - 1) in images_by_cell or (r, c) in merged_map or (r, c) in skip_cells:
+                    row_has_data = True
+                    break
+            
+            if not row_has_data:
+                continue
+                
+            for c in range(1, actual_max_col + 1):
+                if (r, c) in skip_cells:
+                    continue
+                cell_d = ws_d.cell(row=r, column=c)
+                color = get_cell_color(cell_d, theme_colors)
+                if color:
+                    text_color = get_text_color_for_background(color)
+                    color_counter[(color, text_color)] += 1
+                else:
+                    color_counter[(None, None)] += 1
+                    
+        most_bg, most_text = None, None
+        if color_counter:
+            (most_bg, most_text), _ = color_counter.most_common(1)[0]
+            
         sheet_html = []
         sheet_html_preview = []
         
+        table_id = f"excel-table-{sheet_idx}"
+        
         header_html = []
         header_html.append("<div style='overflow-x: auto; margin-bottom: 20px;'>")
-        header_html.append("  <table class='excel-table'>")
+        if most_bg:
+            header_html.append(f"  <style>#{table_id} td {{ background-color: {most_bg}; color: {most_text}; }}</style>")
+        header_html.append(f"  <table class='excel-table' id='{table_id}'>")
         header_html.append("    <thead>")
         header_html.append("      <tr>")
         header_html.append("        <th class='row-idx'></th>")
@@ -313,7 +346,11 @@ def convert_excel_with_formulas(job_id, job_dir, file_path, exclude_hidden_sheet
                 color = get_cell_color(cell_d, theme_colors)
                 if color:
                     text_color = get_text_color_for_background(color)
-                    td_style = f"background-color: {color}; color: {text_color};"
+                    if (color, text_color) != (most_bg, most_text):
+                        td_style = f"background-color: {color}; color: {text_color};"
+                else:
+                    if most_bg is not None:
+                        td_style = "background-color: transparent; color: inherit;"
                     
                 style_attr = f" style='{td_style}'" if td_style else ""
                 

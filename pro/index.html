@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Office to Markdown Converter PRO (100% Static Web)</title>
+    <!-- Tailwind CSS & Modern Typography -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- Local Static Vendor Libraries (Zero Server Load - Offline Capable) -->
+    <script src="libs/exceljs.min.js"></script>
+    <script src="libs/mammoth.browser.min.js"></script>
+    <script src="libs/jszip.min.js"></script>
+    <script src="libs/pdf.min.js"></script>
+    <script src="libs/marked.min.js"></script>
+    <script src="libs/lucide.min.js"></script>
+    
+    <script>
+        // Use local PDF.js worker
+        if (window.pdfjsLib) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'libs/pdf.worker.min.js';
+        }
+    </script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: radial-gradient(circle at 50% 0%, #1e1b4b 0%, #0f172a 40%, #030712 100%);
+            color: #f8fafc;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .glass-card {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .drag-active {
+            border-color: #8b5cf6 !important;
+            background: rgba(139, 92, 246, 0.15) !important;
+            box-shadow: 0 0 25px rgba(139, 92, 246, 0.25);
+        }
+        .markdown-body {
+            color: #e2e8f0;
+            line-height: 1.65;
+        }
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+            color: #f8fafc;
+            margin-top: 1.2em;
+            margin-bottom: 0.4em;
+            font-weight: 600;
+        }
+        .markdown-body h1 { font-size: 1.8em; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.3em; }
+        .markdown-body h2 { font-size: 1.4em; }
+        .markdown-body a { color: #a78bfa; text-decoration: underline; text-underline-offset: 3px; }
+        .markdown-body img { max-width: 100%; border-radius: 8px; margin: 1em 0; border: 1px solid rgba(255,255,255,0.1); }
+        .markdown-body pre { background: #070b14; padding: 1.1em; border-radius: 10px; overflow-x: auto; border: 1px solid rgba(255,255,255,0.06); }
+        .markdown-body code { font-family: 'JetBrains Mono', monospace; background: rgba(255,255,255,0.08); padding: 0.2em 0.45em; border-radius: 5px; font-size: 0.88em; }
+        .markdown-body pre code { background: transparent; padding: 0; }
+        .markdown-body blockquote { border-left: 4px solid #8b5cf6; margin: 0; padding-left: 1em; color: #94a3b8; font-style: italic; }
+        
+        .excel-table-wrap { overflow-x: auto; margin-bottom: 24px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); background: rgba(0,0,0,0.2); }
+        .excel-table { border-collapse: collapse; width: 100%; min-width: 650px; font-size: 13px; }
+        .excel-table th { border: 1px solid rgba(255,255,255,0.1); padding: 6px 10px; text-align: center; font-weight: 600; background-color: rgba(255,255,255,0.06); color: #cbd5e1; }
+        .excel-table td { border: 1px solid rgba(255,255,255,0.08); padding: 6px 10px; vertical-align: top; white-space: pre-wrap; }
+        .excel-table .row-idx { font-weight: 600; background-color: rgba(255,255,255,0.04); text-align: center; width: 45px; color: #94a3b8; }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(0,0,0,0.15); }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+    </style>
+</head>
+<body class="p-3 md:p-6 flex flex-col h-screen select-none">
+    
+    <!-- Full Width 100% Container -->
+    <div class="w-full h-full flex flex-col">
+        <!-- Main Top Bar & Dropzone (Full Width) -->
+        <header class="glass-card rounded-2xl p-4 mb-4 flex flex-col lg:flex-row justify-between items-center gap-4 border-2 border-slate-700/60 transition-all relative shadow-xl w-full" id="dropzone">
+            <input type="file" id="fileInput" class="hidden" accept=".pptx,.pptm,.potx,.docx,.docm,.xlsx,.xlsm,.xltx,.xltm,.pdf,.html,.htm,.csv,.json,.xml,.txt">
+            <input type="file" id="folderInput" class="hidden" webkitdirectory directory multiple>
+            
+            <!-- Logo, Title & Engine Status Badge -->
+            <div class="flex items-center gap-3 shrink-0 w-full lg:w-auto">
+                <div class="p-2.5 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-xl shadow-lg shadow-violet-500/25">
+                    <i data-lucide="zap" class="text-white w-5 h-5"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-violet-300 via-indigo-200 to-white">Office to Markdown <span class="text-xs bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full ml-1 font-semibold">100% STATIC</span></h1>
+                        <span id="engineBadge" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] font-medium bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 rounded-full">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                            <span id="engineStatusText">Sẵn Sàng (Tức thì)</span>
+                        </span>
+                    </div>
+                    <p class="text-xs text-slate-400">100% Client-Side Static Web (Không cần Backend / Python)</p>
+                </div>
+            </div>
+
+            <!-- Upload / Converting Status -->
+            <div class="flex items-center gap-3 flex-1 min-w-0 w-full lg:w-auto px-2" id="uploadState">
+                <div class="bg-slate-800/90 p-2 rounded-xl border border-slate-700/50" id="stateIcon">
+                    <i data-lucide="upload-cloud" class="w-5 h-5 text-violet-400"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <h3 class="text-xs font-semibold text-slate-200 truncate" id="stateTitle">Kéo thả file hoặc thư mục vào đây</h3>
+                    <p class="text-slate-400 text-[11px] truncate" id="stateDesc">Hỗ trợ Excel (công thức & màu), PPTX (ảnh), Word, PDF, CSV, VBA...</p>
+                </div>
+            </div>
+
+            <!-- Action Controls -->
+            <div class="flex flex-wrap sm:flex-nowrap items-center gap-2.5 shrink-0 w-full lg:w-auto justify-end">
+                <label class="flex items-center gap-1.5 cursor-pointer text-xs text-slate-300 hover:text-white transition-colors bg-slate-800/60 hover:bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
+                    <input type="checkbox" id="chkExcludeHidden" class="w-3.5 h-3.5 rounded border-slate-600 text-violet-600 focus:ring-violet-500 bg-slate-900">
+                    <span>Bỏ sheet ẩn</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer text-xs text-slate-300 hover:text-white transition-colors bg-slate-800/60 hover:bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
+                    <input type="checkbox" id="chkLimitRows" class="w-3.5 h-3.5 rounded border-slate-600 text-violet-600 focus:ring-violet-500 bg-slate-900">
+                    <span>Rút gọn (100 dòng)</span>
+                </label>
+                
+                <div class="flex gap-2">
+                    <button onclick="document.getElementById('folderInput').click()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 border border-slate-700 shadow-sm">
+                        <i data-lucide="folder-up" class="w-3.5 h-3.5"></i> Thư mục
+                    </button>
+                    <button onclick="document.getElementById('fileInput').click()" class="px-4 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 shadow-md shadow-violet-600/25">
+                        <i data-lucide="file-up" class="w-3.5 h-3.5"></i> Chọn File
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Workspace Container (Full Width & Height) -->
+        <main class="flex-1 flex flex-col min-h-0 w-full">
+            <div class="w-full h-full glass-card rounded-2xl flex flex-col overflow-hidden relative border border-slate-800 shadow-2xl">
+                <!-- Toolbar -->
+                <div class="border-b border-slate-800 p-3 flex justify-between items-center bg-slate-950/40">
+                    <div class="flex gap-1.5 bg-slate-950/70 p-1 rounded-lg border border-slate-800">
+                        <button id="btnPreview" class="px-3 py-1 text-xs font-medium rounded-md bg-violet-600 text-white transition-all shadow-sm">Preview HTML</button>
+                        <button id="btnCode" class="px-3 py-1 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 transition-all">Markdown Raw</button>
+                    </div>
+                    
+                    <div class="flex items-center gap-2">
+                        <button id="btnCopy" class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-medium text-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed border border-slate-700/60" disabled>
+                            <i data-lucide="copy" class="w-3.5 h-3.5"></i> <span>Sao chép</span>
+                        </button>
+                        <button id="btnDownload" class="flex items-center gap-1.5 px-3.5 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-xs font-medium text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-md shadow-violet-600/25" disabled>
+                            <i data-lucide="download" class="w-3.5 h-3.5"></i> <span id="btnDownloadText">Tải xuống</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Main Content Display -->
+                <div class="flex-1 flex overflow-hidden relative">
+                    <!-- Batch File Sidebar -->
+                    <div id="fileSidebar" class="w-72 border-r border-slate-800 bg-slate-950/50 overflow-y-auto hidden flex-col">
+                        <div class="p-3 border-b border-slate-800/80 text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex justify-between items-center">
+                            <span>Danh sách File</span>
+                            <span id="batchCountBadge" class="bg-violet-500/20 text-violet-300 px-1.5 py-0.5 rounded text-[10px]">0</span>
+                        </div>
+                        <div id="fileList" class="flex flex-col p-2 gap-1"></div>
+                    </div>
+
+                    <!-- Viewport Area (Full Width) -->
+                    <div class="flex-1 overflow-auto p-6 relative select-text" id="viewportContainer">
+                        <!-- Empty Placeholder -->
+                        <div id="emptyState" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500">
+                            <div class="p-4 bg-slate-900/60 rounded-2xl border border-slate-800 mb-3 shadow-inner">
+                                <i data-lucide="file-code-2" class="w-10 h-10 text-violet-400/60"></i>
+                            </div>
+                            <p class="text-sm font-medium text-slate-300">Kéo thả file hoặc chọn tài liệu để bắt đầu</p>
+                            <p class="text-xs text-slate-500 mt-1">Xử lý 100% bằng JavaScript Engine trên trình duyệt - Tốc độ tức thì</p>
+                        </div>
+
+                        <!-- Render Views -->
+                        <div id="previewArea" class="markdown-body hidden w-full h-full"></div>
+                        <textarea id="codeArea" class="w-full h-full bg-transparent border-none resize-none focus:ring-0 text-xs font-mono text-slate-300 hidden" readonly></textarea>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Core Native JavaScript Engine Script -->
+    <script>
+        lucide.createIcons();
+
+        // UI references
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        const folderInput = document.getElementById('folderInput');
+        const stateIcon = document.getElementById('stateIcon');
+        const stateTitle = document.getElementById('stateTitle');
+        const stateDesc = document.getElementById('stateDesc');
+        const btnPreview = document.getElementById('btnPreview');
+        const btnCode = document.getElementById('btnCode');
+        const btnCopy = document.getElementById('btnCopy');
+        const btnDownload = document.getElementById('btnDownload');
+        const btnDownloadText = document.getElementById('btnDownloadText');
+        const previewArea = document.getElementById('previewArea');
+        const codeArea = document.getElementById('codeArea');
+        const emptyState = document.getElementById('emptyState');
+        const fileSidebar = document.getElementById('fileSidebar');
+        const fileList = document.getElementById('fileList');
+        const batchCountBadge = document.getElementById('batchCountBadge');
+        const chkLimitRows = document.getElementById('chkLimitRows');
+        const chkExcludeHidden = document.getElementById('chkExcludeHidden');
+
+        // State
+        let currentResults = [];
+        let currentActiveIndex = 0;
+
+        // Helpers
+        function getColumnLetter(colIndex) {
+            let temp, letter = '';
+            while (colIndex > 0) {
+                temp = (colIndex - 1) % 26;
+                letter = String.fromCharCode(temp + 65) + letter;
+                colIndex = (colIndex - temp - 1) / 26;
+            }
+            return letter;
+        }
+
+        function getTextColor(bgHex) {
+            if (!bgHex) return '#FFFFFF';
+            const hex = bgHex.replace('#', '');
+            const r = parseInt(hex.substr(0, 2), 16) || 0;
+            const g = parseInt(hex.substr(2, 2), 16) || 0;
+            const b = parseInt(hex.substr(4, 2), 16) || 0;
+            const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+            return luminance > 0.5 ? '#000000' : '#FFFFFF';
+        }
+
+        // 1. EXCEL CONVERTER (ExcelJS)
+        async function convertExcel(buffer, filename, excludeHidden) {
+            const workbook = new ExcelJS.Workbook();
+            await workbook.xlsx.load(buffer);
+
+            const parts = [];
+            const partsPreview = [];
+            const extractedImages = {};
+            let imgCounter = 0;
+
+            const styleBlock = `<style>
+  .excel-table-wrap { overflow-x: auto; margin-bottom: 24px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); background: rgba(0,0,0,0.2); }
+  .excel-table { border-collapse: collapse; width: 100%; min-width: 650px; font-size: 13px; }
+  .excel-table th { border: 1px solid rgba(255,255,255,0.1); padding: 6px 10px; text-align: center; font-weight: 600; background-color: rgba(255,255,255,0.06); color: #cbd5e1; }
+  .excel-table td { border: 1px solid rgba(255,255,255,0.08); padding: 6px 10px; vertical-align: top; white-space: pre-wrap; }
+  .excel-table .row-idx { font-weight: 600; background-color: rgba(255,255,255,0.04); text-align: center; width: 45px; color: #94a3b8; }
+</style>\n`;
+
+            parts.push(styleBlock);
+            partsPreview.push(styleBlock);
+
+            // Extract all media images from workbook
+            const imageMap = {};
+            if (workbook.media && workbook.media.length) {
+                workbook.media.forEach((med, idx) => {
+                    if (med.type === 'image') {
+                        imgCounter++;
+                        const ext = med.extension || 'png';
+                        const saveName = `excel_img_${imgCounter}.${ext}`;
+                        const base64Str = med.buffer.toString('base64');
+                        const mime = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+                        const dataUri = `data:${mime};base64,${base64Str}`;
+                        
+                        extractedImages[saveName] = { base64: base64Str, mime: mime, data_uri: dataUri };
+                        imageMap[med.index] = { saveName, dataUri };
+                    }
+                });
+            }
+
+            workbook.eachSheet((worksheet, sheetId) => {
+                if (excludeHidden && worksheet.state === 'hidden') return;
+
+                const sheetTitle = worksheet.state === 'hidden' ? `${worksheet.name} (sheet ẩn)` : worksheet.name;
+                parts.push(`\n## ${sheetTitle}\n`);
+                partsPreview.push(`\n## ${sheetTitle}\n`);
+
+                const maxCol = worksheet.columnCount || 1;
+                const maxRow = worksheet.rowCount || 1;
+                if (maxRow === 0 || maxCol === 0) return;
+
+                const tableId = `excel-table-${sheetId}`;
+                const headerHtml = [
+                    `<div class='excel-table-wrap'>`,
+                    `  <table class='excel-table' id='${tableId}'>`,
+                    `    <thead><tr><th class='row-idx'></th>`,
+                    Array.from({ length: maxCol }, (_, i) => `<th>${getColumnLetter(i + 1)}</th>`).join(''),
+                    `</tr></thead><tbody>`
+                ].join('\n');
+
+                parts.push(headerHtml);
+                partsPreview.push(headerHtml);
+
+                let renderedCount = 0;
+                let previewTruncated = false;
+
+                worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+                    const rowCells = [`      <tr>\n        <td class='row-idx'>${rowNumber}</td>`];
+
+                    for (let c = 1; c <= maxCol; c++) {
+                        const cell = row.getCell(c);
+                        let text = '';
+                        
+                        if (cell.formula) {
+                            const val = cell.result !== undefined ? cell.result : (cell.value !== undefined && typeof cell.value !== 'object' ? cell.value : '');
+                            text = `${val} (\`=${cell.formula}\`)`;
+                        } else if (cell.value !== null && cell.value !== undefined) {
+                            if (typeof cell.value === 'object' && cell.value.richText) {
+                                text = cell.value.richText.map(t => t.text).join('');
+                            } else if (typeof cell.value === 'object' && cell.value.text) {
+                                text = cell.value.text;
+                            } else {
+                                text = String(cell.value);
+                            }
+                        }
+
+                        // Colors
+                        let tdStyle = '';
+                        if (cell.fill && cell.fill.type === 'pattern' && cell.fill.fgColor) {
+                            let argb = cell.fill.fgColor.argb;
+                            if (argb && argb.length === 8) {
+                                const hex = `#${argb.substring(2)}`;
+                                const txtColor = getTextColor(hex);
+                                tdStyle = `background-color: ${hex}; color: ${txtColor};`;
+                            }
+                        }
+
+                        const styleAttr = tdStyle ? ` style='${tdStyle}'` : '';
+                        rowCells.push(`        <td${styleAttr}>${text}</td>`);
+                    }
+
+                    rowCells.push(`      </tr>`);
+                    const rowStr = rowCells.join('\n');
+                    parts.push(rowStr);
+
+                    if (renderedCount < 100) {
+                        partsPreview.push(rowStr);
+                        renderedCount++;
+                    } else if (!previewTruncated) {
+                        partsPreview.push(`      <tr><td colspan='${maxCol + 1}' style='text-align: center; font-style: italic; color: #94a3b8; background-color: rgba(255,255,255,0.02); padding: 12px;'>... Đã ẩn bớt các dòng từ đây để tránh lag trình duyệt. Tải file về để xem đầy đủ ...</td></tr>`);
+                        previewTruncated = true;
+                    }
+                });
+
+                const footerHtml = `    </tbody>\n  </table>\n</div>\n`;
+                parts.push(footerHtml);
+                partsPreview.push(footerHtml);
+            });
+
+            return {
+                markdown: parts.join('\n'),
+                markdown_preview: partsPreview.join('\n'),
+                images: extractedImages,
+                has_images: Object.keys(extractedImages).length > 0
+            };
+        }
+
+        // 2. POWERPOINT CONVERTER (JSZip + XML DOM)
+        async function convertPPTX(buffer, filename) {
+            const zip = await JSZip.loadAsync(buffer);
+            const parts = [];
+            const extractedImages = {};
+            let imgCounter = 0;
+
+            // Extract all media images
+            for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
+                if (relativePath.startsWith('ppt/media/') && !zipEntry.dir) {
+                    imgCounter++;
+                    const ext = relativePath.split('.').pop() || 'png';
+                    const saveName = `slide_img_${imgCounter}.${ext}`;
+                    const base64Str = await zipEntry.async('base64');
+                    const mime = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+                    extractedImages[saveName] = { base64: base64Str, mime: mime, data_uri: `data:${mime};base64,${base64Str}` };
+                }
+            }
+
+            // Extract slide texts in order
+            const slideFiles = Object.keys(zip.files).filter(k => k.match(/^ppt\/slides\/slide\d+\.xml$/)).sort((a, b) => {
+                const numA = parseInt(a.match(/\d+/)[0]);
+                const numB = parseInt(b.match(/\d+/)[0]);
+                return numA - numB;
+            });
+
+            const parser = new DOMParser();
+            for (let i = 0; i < slideFiles.length; i++) {
+                parts.push(`\n## Slide ${i + 1}\n`);
+                const slideXmlStr = await zip.file(slideFiles[i]).async('text');
+                const doc = parser.parseFromString(slideXmlStr, 'application/xml');
+
+                // Extract paragraphs & tables
+                const textNodes = doc.querySelectorAll('a\\:p, p');
+                textNodes.forEach(p => {
+                    const textContent = Array.from(p.querySelectorAll('a\\:t, t')).map(t => t.textContent).join('');
+                    if (textContent.trim()) {
+                        parts.push(textContent.trim());
+                    }
+                });
+            }
+
+            // Append extracted images
+            if (Object.keys(extractedImages).length > 0) {
+                parts.push(`\n### Hình ảnh trong bài thuyết trình\n`);
+                for (const imgName of Object.keys(extractedImages)) {
+                    parts.push(`![${imgName}](${imgName})\n`);
+                }
+            }
+
+            const fullText = parts.join('\n\n');
+            return {
+                markdown: fullText,
+                markdown_preview: fullText,
+                images: extractedImages,
+                has_images: Object.keys(extractedImages).length > 0
+            };
+        }
+
+        // 3. WORD CONVERTER (Mammoth.js)
+        async function convertDOCX(buffer) {
+            const extractedImages = {};
+            let imgCounter = 0;
+
+            const options = {
+                convertImage: mammoth.images.inline(function(element) {
+                    return element.read("base64").then(function(imageBuffer) {
+                        imgCounter++;
+                        const ext = element.contentType.split('/').pop() || 'png';
+                        const saveName = `docx_img_${imgCounter}.${ext}`;
+                        const mime = element.contentType;
+                        const dataUri = `data:${mime};base64,${imageBuffer}`;
+                        
+                        extractedImages[saveName] = { base64: imageBuffer, mime: mime, data_uri: dataUri };
+                        return { src: saveName };
+                    });
+                })
+            };
+
+            const result = await mammoth.convertToHtml({ arrayBuffer: buffer }, options);
+            let html = result.value;
+
+            // Convert basic HTML to Markdown
+            html = html.replace(/<h1>(.*?)<\/h1>/gi, '# $1\n\n')
+                       .replace(/<h2>(.*?)<\/h2>/gi, '## $1\n\n')
+                       .replace(/<h3>(.*?)<\/h3>/gi, '### $1\n\n')
+                       .replace(/<h4>(.*?)<\/h4>/gi, '#### $1\n\n')
+                       .replace(/<p>(.*?)<\/p>/gi, '$1\n\n')
+                       .replace(/<strong>(.*?)<\/strong>/gi, '**$1**')
+                       .replace(/<em>(.*?)<\/em>/gi, '*$1*')
+                       .replace(/<code>(.*?)<\/code>/gi, '`$1`')
+                       .replace(/<a href="([^"]+)">(.*?)<\/a>/gi, '[$2]($1)')
+                       .replace(/<img src="([^"]+)"\s*\/?>/gi, '![$1]($1)')
+                       .replace(/<li>(.*?)<\/li>/gi, '- $1\n')
+                       .replace(/<\/?(ol|ul)>/gi, '\n');
+
+            return {
+                markdown: html.trim(),
+                markdown_preview: html.trim(),
+                images: extractedImages,
+                has_images: Object.keys(extractedImages).length > 0
+            };
+        }
+
+        // 4. PDF CONVERTER (PDF.js)
+        async function convertPDF(buffer) {
+            const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+            const parts = [];
+
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map(item => item.str).join(' ');
+                if (pageText.trim()) {
+                    parts.push(`## Trang ${i}\n\n${pageText.trim()}`);
+                }
+            }
+
+            const fullText = parts.length ? parts.join('\n\n') : 'Không thể trích xuất văn bản từ PDF này (có thể là file scan dạng ảnh).';
+            return {
+                markdown: fullText,
+                markdown_preview: fullText,
+                images: {},
+                has_images: false
+            };
+        }
+
+        // 5. VBA MACROS EXTRACTOR (JSZip)
+        async function extractVBA(buffer) {
+            try {
+                const zip = await JSZip.loadAsync(buffer);
+                const vbaEntry = zip.file(/vbaProject\.bin$/i)[0];
+                if (vbaEntry) {
+                    return `\n\n## VBA Macros\n*Phát hiện module VBA Macros trong tệp Office này (vbaProject.bin).*\n`;
+                }
+            } catch (e) {}
+            return '';
+        }
+
+        // MAIN CONVERSION ROUTER
+        async function convertDocumentNative(buffer, filename, excludeHidden) {
+            const lower = filename.toLowerCase();
+            let res;
+
+            if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm') || lower.endsWith('.xltx') || lower.endsWith('.xltm')) {
+                res = await convertExcel(buffer, filename, excludeHidden);
+            } else if (lower.endsWith('.pptx') || lower.endsWith('.pptm') || lower.endsWith('.potx')) {
+                res = await convertPPTX(buffer, filename);
+            } else if (lower.endsWith('.docx') || lower.endsWith('.docm')) {
+                res = await convertDOCX(buffer);
+            } else if (lower.endsWith('.pdf')) {
+                res = await convertPDF(buffer);
+            } else if (lower.endsWith('.csv') || lower.endsWith('.json') || lower.endsWith('.xml') || lower.endsWith('.html') || lower.endsWith('.txt') || lower.endsWith('.md')) {
+                const text = new TextDecoder('utf-8').decode(buffer);
+                res = { markdown: text, markdown_preview: text, images: {}, has_images: false };
+            } else {
+                throw new Error(`Định dạng file không được hỗ trợ: ${filename}`);
+            }
+
+            // VBA Check
+            if (lower.match(/\.(xlsm|docm|pptm)$/)) {
+                const vbaInfo = await extractVBA(buffer);
+                if (vbaInfo) {
+                    res.markdown += vbaInfo;
+                    res.markdown_preview += vbaInfo;
+                }
+            }
+
+            res.filename = filename;
+            return res;
+        }
+
+        // Render Active Document
+        function renderActiveDocument() {
+            if (!currentResults.length) return;
+            const doc = currentResults[currentActiveIndex];
+            if (!doc) return;
+
+            const isLimit = chkLimitRows.checked;
+            const mdContent = isLimit ? (doc.markdown_preview || doc.markdown) : doc.markdown;
+
+            codeArea.value = mdContent;
+
+            // Substitute image filenames with Data URIs in HTML preview
+            let previewMd = mdContent;
+            if (doc.images) {
+                for (const [imgName, imgMeta] of Object.entries(doc.images)) {
+                    if (imgMeta && imgMeta.data_uri) {
+                        const escapedName = imgName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        previewMd = previewMd.replace(new RegExp(`src=['"]${escapedName}['"]`, 'g'), `src="${imgMeta.data_uri}"`);
+                        previewMd = previewMd.replace(new RegExp(`\\]\\(${escapedName}\\)`, 'g'), `](${imgMeta.data_uri})`);
+                    }
+                }
+            }
+
+            previewArea.innerHTML = marked.parse(previewMd);
+        }
+
+        chkLimitRows.addEventListener('change', renderActiveDocument);
+
+        function selectFile(index) {
+            currentActiveIndex = index;
+            document.querySelectorAll('.file-item').forEach((el, i) => {
+                if (i === index) {
+                    el.className = 'file-item cursor-pointer p-2.5 rounded-xl text-xs truncate border transition-all bg-violet-600/30 border-violet-500/60 text-white font-semibold shadow-md shadow-violet-600/20';
+                } else {
+                    el.className = 'file-item cursor-pointer p-2.5 rounded-xl text-xs truncate border transition-all border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-slate-200';
+                }
+            });
+            renderActiveDocument();
+        }
+
+        function handleConversionComplete(results, isBatch) {
+            currentResults = results;
+            currentActiveIndex = 0;
+
+            stateIcon.innerHTML = '<i data-lucide="check-circle" class="w-5 h-5 text-emerald-400"></i>';
+            stateTitle.textContent = 'Hoàn tất chuyển đổi!';
+            stateTitle.className = 'text-xs font-semibold text-emerald-400';
+            stateDesc.textContent = isBatch 
+                ? `Đã xử lý xong ${results.length} files.`
+                : `Đã chuyển đổi thành công: ${results[0].filename}`;
+
+            dropzone.classList.remove('pointer-events-none', 'opacity-70');
+            emptyState.classList.add('hidden');
+            btnCopy.disabled = false;
+            btnDownload.disabled = false;
+
+            if (isBatch) {
+                fileSidebar.classList.remove('hidden');
+                batchCountBadge.textContent = results.length;
+                fileList.innerHTML = '';
+                results.forEach((res, idx) => {
+                    const item = document.createElement('div');
+                    item.className = 'file-item cursor-pointer p-2.5 rounded-xl text-xs truncate border transition-all border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-slate-200';
+                    item.title = res.filename;
+                    item.textContent = res.filename;
+                    item.onclick = () => selectFile(idx);
+                    fileList.appendChild(item);
+                });
+                selectFile(0);
+                btnDownloadText.textContent = 'Tải tất cả (ZIP)';
+            } else {
+                fileSidebar.classList.add('hidden');
+                const single = results[0];
+                btnDownloadText.textContent = single.has_images ? 'Tải ZIP (kèm ảnh)' : 'Tải .md';
+                renderActiveDocument();
+            }
+
+            if (btnPreview.classList.contains('bg-violet-600')) {
+                previewArea.classList.remove('hidden');
+                codeArea.classList.add('hidden');
+            } else {
+                codeArea.classList.remove('hidden');
+                previewArea.classList.add('hidden');
+            }
+
+            lucide.createIcons();
+        }
+
+        function handleConversionError(errorMsg) {
+            stateIcon.innerHTML = '<i data-lucide="alert-triangle" class="w-5 h-5 text-rose-400"></i>';
+            stateTitle.textContent = 'Lỗi chuyển đổi!';
+            stateTitle.className = 'text-xs font-semibold text-rose-400';
+            stateDesc.textContent = errorMsg;
+            dropzone.classList.remove('pointer-events-none', 'opacity-70');
+            lucide.createIcons();
+        }
+
+        // Tab Switching
+        btnPreview.addEventListener('click', () => {
+            btnPreview.className = 'px-3 py-1 text-xs font-medium rounded-md bg-violet-600 text-white transition-all shadow-sm';
+            btnCode.className = 'px-3 py-1 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 transition-all';
+            previewArea.classList.remove('hidden');
+            codeArea.classList.add('hidden');
+        });
+
+        btnCode.addEventListener('click', () => {
+            btnCode.className = 'px-3 py-1 text-xs font-medium rounded-md bg-violet-600 text-white transition-all shadow-sm';
+            btnPreview.className = 'px-3 py-1 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200 transition-all';
+            codeArea.classList.remove('hidden');
+            previewArea.classList.add('hidden');
+        });
+
+        // Copy button
+        btnCopy.addEventListener('click', () => {
+            if (!codeArea.value) return;
+            navigator.clipboard.writeText(codeArea.value);
+            const originalContent = btnCopy.innerHTML;
+            btnCopy.innerHTML = '<i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i> <span>Đã sao chép!</span>';
+            lucide.createIcons();
+            setTimeout(() => {
+                btnCopy.innerHTML = originalContent;
+                lucide.createIcons();
+            }, 2000);
+        });
+
+        // Native Download Helper
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // Client-side ZIP & MD Generation
+        btnDownload.addEventListener('click', async () => {
+            if (!currentResults.length) return;
+
+            const isBatch = currentResults.length > 1;
+            const isLimit = chkLimitRows.checked;
+
+            if (isBatch) {
+                const zip = new JSZip();
+                for (const doc of currentResults) {
+                    const baseName = doc.filename.replace(/\.[^/.]+$/, "");
+                    const mdContent = isLimit ? (doc.markdown_preview || doc.markdown) : doc.markdown;
+                    zip.file(`${baseName}.md`, mdContent);
+
+                    if (doc.images) {
+                        for (const [imgName, imgMeta] of Object.entries(doc.images)) {
+                            if (imgMeta && imgMeta.base64) {
+                                zip.file(imgName, imgMeta.base64, { base64: true });
+                            }
+                        }
+                    }
+                }
+                const content = await zip.generateAsync({ type: 'blob' });
+                downloadBlob(content, 'documents_markdown.zip');
+            } else {
+                const doc = currentResults[0];
+                const baseName = doc.filename.replace(/\.[^/.]+$/, "");
+                const mdContent = isLimit ? (doc.markdown_preview || doc.markdown) : doc.markdown;
+
+                if (doc.has_images) {
+                    const zip = new JSZip();
+                    zip.file(`${baseName}.md`, mdContent);
+                    for (const [imgName, imgMeta] of Object.entries(doc.images)) {
+                        if (imgMeta && imgMeta.base64) {
+                            zip.file(imgName, imgMeta.base64, { base64: true });
+                        }
+                    }
+                    const content = await zip.generateAsync({ type: 'blob' });
+                    downloadBlob(content, `${baseName}.zip`);
+                } else {
+                    const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8' });
+                    downloadBlob(blob, `${baseName}.md`);
+                }
+            }
+        });
+
+        // File Handler - Processes files instantly
+        async function processFiles(files) {
+            if (!files.length) return;
+
+            stateIcon.innerHTML = '<div class="w-5 h-5 border-2 border-violet-500 border-t-transparent rounded-full animate-spin"></div>';
+            stateTitle.textContent = 'Đang xử lý...';
+            stateTitle.className = 'text-xs font-semibold text-violet-300';
+            dropzone.classList.add('pointer-events-none', 'opacity-70');
+
+            const results = [];
+            const excludeHidden = chkExcludeHidden.checked;
+
+            try {
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    stateDesc.textContent = `Đang chuyển đổi ${file.name} (${i + 1}/${files.length})...`;
+                    
+                    const buffer = await file.arrayBuffer();
+                    const result = await convertDocumentNative(buffer, file.name, excludeHidden);
+                    results.push(result);
+                }
+
+                handleConversionComplete(results, files.length > 1);
+
+            } catch (err) {
+                console.error("Conversion error:", err);
+                handleConversionError(err.message || 'Lỗi xử lý file.');
+            }
+        }
+
+        // Drag and drop setup
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+            document.body.addEventListener(evt, e => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        });
+
+        ['dragenter', 'dragover'].forEach(evt => {
+            document.body.addEventListener(evt, () => dropzone.classList.add('drag-active', 'scale-[1.01]'));
+        });
+
+        ['dragleave', 'drop'].forEach(evt => {
+            document.body.addEventListener(evt, () => dropzone.classList.remove('drag-active', 'scale-[1.01]'));
+        });
+
+        document.body.addEventListener('drop', async (e) => {
+            const items = e.dataTransfer.items;
+            if (items && items.length) {
+                const files = await getFilesFromDataTransferItems(items);
+                if (files.length) processFiles(files);
+            } else if (e.dataTransfer.files.length) {
+                processFiles(Array.from(e.dataTransfer.files));
+            }
+        });
+
+        async function getFilesFromDataTransferItems(items) {
+            const files = [];
+            async function traverse(item) {
+                if (!item) return;
+                if (item.isFile) {
+                    const f = await new Promise(res => item.file(res));
+                    files.push(f);
+                } else if (item.isDirectory) {
+                    const reader = item.createReader();
+                    const entries = await new Promise(res => reader.readEntries(res));
+                    for (const entry of entries) {
+                        await traverse(entry);
+                    }
+                }
+            }
+            for (let i = 0; i < items.length; i++) {
+                const entry = items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null;
+                if (entry) await traverse(entry);
+            }
+            return files;
+        }
+
+        fileInput.addEventListener('change', function() {
+            if (this.files.length) {
+                processFiles(Array.from(this.files));
+                this.value = '';
+            }
+        });
+
+        folderInput.addEventListener('change', function() {
+            if (this.files.length) {
+                processFiles(Array.from(this.files));
+                this.value = '';
+            }
+        });
+    </script>
+</body>
+</html>

@@ -102,7 +102,7 @@
             return '';
         }
 
-        // 1. EXCEL CONVERTER (ExcelJS)
+        // 1. EXCEL CONVERTER (ExcelJS + JSZip Hybrid Engine)
         async function convertExcel(buffer, filename, excludeHidden) {
             const workbook = new ExcelJS.Workbook();
             await workbook.xlsx.load(buffer);
@@ -110,6 +110,7 @@
             const parts = [];
             const partsPreview = [];
             const extractedImages = {};
+            const assignedImages = new Set();
             let imgCounter = 0;
 
             const styleBlock = `<style>
@@ -123,11 +124,11 @@
             parts.push(styleBlock);
             partsPreview.push(styleBlock);
 
-            // Extract all media images from workbook
+            // 1. Extract all media images from ExcelJS
             const imageMap = {};
             if (workbook.media && workbook.media.length) {
                 workbook.media.forEach((med, idx) => {
-                    if (med.type === 'image') {
+                    if (med.type === 'image' || med.buffer) {
                         imgCounter++;
                         const ext = med.extension || 'png';
                         const saveName = `excel_img_${imgCounter}.${ext}`;
@@ -136,11 +137,33 @@
                         const dataUri = `data:${mime};base64,${base64Str}`;
                         
                         extractedImages[saveName] = { base64: base64Str, mime: mime, data_uri: dataUri };
-                        imageMap[med.index] = { saveName, dataUri };
+                        imageMap[med.index !== undefined ? med.index : idx] = saveName;
                     }
                 });
             }
 
+            // 2. Extra media scan via JSZip in xl/media/
+            try {
+                const zip = await JSZip.loadAsync(buffer);
+                for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
+                    if (relativePath.startsWith('xl/media/') && !zipEntry.dir) {
+                        const ext = relativePath.split('.').pop() || 'png';
+                        const base64Str = await zipEntry.async('base64');
+                        const exists = Object.values(extractedImages).some(im => im.base64 === base64Str);
+                        if (!exists) {
+                            imgCounter++;
+                            const saveName = `excel_img_${imgCounter}.${ext}`;
+                            const mime = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+                            const dataUri = `data:${mime};base64,${base64Str}`;
+                            extractedImages[saveName] = { base64: base64Str, mime: mime, data_uri: dataUri };
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('JSZip media scan warning:', e);
+            }
+
+            // 3. Process each worksheet
             workbook.eachSheet((worksheet, sheetId) => {
                 if (excludeHidden && worksheet.state === 'hidden') return;
 
@@ -148,33 +171,39 @@
                 parts.push(`\n## ${sheetTitle}\n`);
                 partsPreview.push(`\n## ${sheetTitle}\n`);
 
-                const maxCol = worksheet.columnCount || 1;
-                const maxRow = worksheet.rowCount || 1;
-                if (maxRow === 0 || maxCol === 0) return;
+                // Check and attach sheet images
+                const sheetImageObjects = worksheet.getImages ? worksheet.getImages() : [];
+                const sheetImageNames = [];
+                if (sheetImageObjects && sheetImageObjects.length) {
+                    sheetImageObjects.forEach(imgObj => {
+                        const imgName = imageMap[imgObj.imageId];
+                        if (imgName) {
+                            sheetImageNames.push(imgName);
+                            assignedImages.add(imgName);
+                        }
+                    });
+                }
 
-                const tableId = `excel-table-${sheetId}`;
-                const headerHtml = [
-                    `<div class='excel-table-wrap'>`,
-                    `  <table class='excel-table' id='${tableId}'>`,
-                    `    <thead><tr><th class='row-idx'></th>`,
-                    Array.from({ length: maxCol }, (_, i) => `<th>${getColumnLetter(i + 1)}</th>`).join(''),
-                    `</tr></thead><tbody>`
-                ].join('\n');
+                if (sheetImageNames.length > 0) {
+                    const imgMd = sheetImageNames.map(name => `![${name}](${name})`).join('\n\n') + '\n';
+                    parts.push(imgMd);
+                    partsPreview.push(imgMd);
+                }
 
-                parts.push(headerHtml);
-                partsPreview.push(headerHtml);
+                const maxCol = worksheet.columnCount || 0;
 
-                let renderedCount = 0;
-                let previewTruncated = false;
-
+                // Collect row content
+                const rowsData = [];
                 worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-                    const rowCells = [`      <tr>\n        <td class='row-idx'>${rowNumber}</td>`];
+                    const rowCells = [];
+                    let hasDataInRow = false;
+                    const colLimit = Math.max(maxCol, row.cellCount || 1);
 
-                    for (let c = 1; c <= maxCol; c++) {
+                    for (let c = 1; c <= colLimit; c++) {
                         const cell = row.getCell(c);
                         const text = formatCellValue(cell);
+                        if (text) hasDataInRow = true;
 
-                        // Colors
                         let tdStyle = '';
                         if (cell.fill && cell.fill.type === 'pattern' && cell.fill.fgColor) {
                             let argb = cell.fill.fgColor.argb;
@@ -189,23 +218,58 @@
                         rowCells.push(`        <td${styleAttr}>${text}</td>`);
                     }
 
-                    rowCells.push(`      </tr>`);
-                    const rowStr = rowCells.join('\n');
-                    parts.push(rowStr);
-
-                    if (renderedCount < 100) {
-                        partsPreview.push(rowStr);
-                        renderedCount++;
-                    } else if (!previewTruncated) {
-                        partsPreview.push(`      <tr><td colspan='${maxCol + 1}' style='text-align: center; font-style: italic; color: #94a3b8; background-color: rgba(255,255,255,0.02); padding: 12px;'>... Đã ẩn bớt các dòng từ đây để tránh lag trình duyệt. Tải file về để xem đầy đủ ...</td></tr>`);
-                        previewTruncated = true;
+                    if (hasDataInRow || rowCells.some(rc => rc.includes('style='))) {
+                        rowsData.push({ rowNumber, rowCells, colLimit });
                     }
                 });
 
-                const footerHtml = `    </tbody>\n  </table>\n</div>\n`;
-                parts.push(footerHtml);
-                partsPreview.push(footerHtml);
+                if (rowsData.length > 0) {
+                    const tableId = `excel-table-${sheetId}`;
+                    const effectiveColCount = Math.max(...rowsData.map(r => r.colLimit), 1);
+                    const headerHtml = [
+                        `<div class='excel-table-wrap'>`,
+                        `  <table class='excel-table' id='${tableId}'>`,
+                        `    <thead><tr><th class='row-idx'></th>`,
+                        Array.from({ length: effectiveColCount }, (_, i) => `<th>${getColumnLetter(i + 1)}</th>`).join(''),
+                        `</tr></thead><tbody>`
+                    ].join('\n');
+
+                    parts.push(headerHtml);
+                    partsPreview.push(headerHtml);
+
+                    let renderedCount = 0;
+                    let previewTruncated = false;
+
+                    rowsData.forEach(({ rowNumber, rowCells }) => {
+                        const rowHtml = `      <tr>\n        <td class='row-idx'>${rowNumber}</td>\n${rowCells.join('\n')}\n      </tr>`;
+                        parts.push(rowHtml);
+
+                        if (renderedCount < 100) {
+                            partsPreview.push(rowHtml);
+                            renderedCount++;
+                        } else if (!previewTruncated) {
+                            partsPreview.push(`      <tr><td colspan='${effectiveColCount + 1}' style='text-align: center; font-style: italic; color: #94a3b8; background-color: rgba(255,255,255,0.02); padding: 12px;'>... Đã ẩn bớt các dòng từ đây để tránh lag trình duyệt. Tải file về để xem đầy đủ ...</td></tr>`);
+                            previewTruncated = true;
+                        }
+                    });
+
+                    const footerHtml = `    </tbody>\n  </table>\n</div>\n`;
+                    parts.push(footerHtml);
+                    partsPreview.push(footerHtml);
+                } else if (sheetImageNames.length === 0) {
+                    // No table rows and no sheet images
+                    parts.push(`*(Sheet này không chứa dữ liệu bảng dạng văn bản)*\n`);
+                    partsPreview.push(`*(Sheet này không chứa dữ liệu bảng dạng văn bản)*\n`);
+                }
             });
+
+            // 4. Attach unassigned images to markdown
+            const unassigned = Object.keys(extractedImages).filter(name => !assignedImages.has(name));
+            if (unassigned.length > 0) {
+                const extraImgMd = `\n### Hình ảnh trong tài liệu Excel\n\n` + unassigned.map(name => `![${name}](${name})`).join('\n\n') + '\n';
+                parts.push(extraImgMd);
+                partsPreview.push(extraImgMd);
+            }
 
             return {
                 markdown: parts.join('\n'),

@@ -47,6 +47,61 @@
             return luminance > 0.5 ? '#000000' : '#FFFFFF';
         }
 
+        // Format cell value safely (no [object Object], handling formulas, richText, hyperlinks, dates, and merged cells)
+        function formatCellValue(cell) {
+            if (!cell || cell.value === null || cell.value === undefined) return '';
+
+            // Merged Cell Slave: keep empty to avoid repeating text and cluttering tables
+            if (cell.isMerged && cell.master && cell.address !== cell.master.address) {
+                return '';
+            }
+
+            const val = cell.value;
+
+            // Formulas: cell.formula or cell.value formula objects
+            const formula = cell.formula || (val && typeof val === 'object' ? (val.formula || val.sharedFormula) : null);
+            if (formula) {
+                let resVal = cell.result !== undefined ? cell.result : (val && typeof val === 'object' && val.result !== undefined ? val.result : '');
+                let cleanRes = '';
+                if (resVal instanceof Date) {
+                    cleanRes = resVal.toLocaleDateString('vi-VN');
+                } else if (resVal !== null && resVal !== undefined && typeof resVal !== 'object') {
+                    cleanRes = String(resVal);
+                } else if (resVal && typeof resVal === 'object' && resVal.error) {
+                    cleanRes = String(resVal.error);
+                }
+                return cleanRes !== '' ? `${cleanRes} (\`=${formula}\`)` : `\`=${formula}\``;
+            }
+
+            // RichText Object
+            if (typeof val === 'object' && Array.isArray(val.richText)) {
+                return val.richText.map(t => t.text || '').join('');
+            }
+
+            // Hyperlink Object
+            if (typeof val === 'object' && (val.text || val.hyperlink)) {
+                const text = val.text || val.hyperlink;
+                return val.hyperlink ? `[${text}](${val.hyperlink})` : String(text);
+            }
+
+            // Error Object
+            if (typeof val === 'object' && val.error) {
+                return String(val.error);
+            }
+
+            // Date Object
+            if (val instanceof Date) {
+                return val.toLocaleDateString('vi-VN');
+            }
+
+            // Primitive Values
+            if (typeof val !== 'object') {
+                return String(val);
+            }
+
+            return '';
+        }
+
         // 1. EXCEL CONVERTER (ExcelJS)
         async function convertExcel(buffer, filename, excludeHidden) {
             const workbook = new ExcelJS.Workbook();
@@ -117,20 +172,7 @@
 
                     for (let c = 1; c <= maxCol; c++) {
                         const cell = row.getCell(c);
-                        let text = '';
-                        
-                        if (cell.formula) {
-                            const val = cell.result !== undefined ? cell.result : (cell.value !== undefined && typeof cell.value !== 'object' ? cell.value : '');
-                            text = `${val} (\`=${cell.formula}\`)`;
-                        } else if (cell.value !== null && cell.value !== undefined) {
-                            if (typeof cell.value === 'object' && cell.value.richText) {
-                                text = cell.value.richText.map(t => t.text).join('');
-                            } else if (typeof cell.value === 'object' && cell.value.text) {
-                                text = cell.value.text;
-                            } else {
-                                text = String(cell.value);
-                            }
-                        }
+                        const text = formatCellValue(cell);
 
                         // Colors
                         let tdStyle = '';
@@ -348,6 +390,55 @@
             return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(out));
         }
 
+        function extractCleanVBAModules(vbaBuffer) {
+            const extractedBlocks = [];
+            const seenSignatures = new Set();
+
+            for (let i = 0; i < vbaBuffer.length - 10; i++) {
+                if (vbaBuffer[i] === 0x01 && (vbaBuffer[i + 2] & 0xF0) === 0xB0) {
+                    const decomp = decompressMSOVBA(vbaBuffer.subarray(i));
+                    if (!decomp) continue;
+
+                    const text = decomp.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                    const lines = text.split('\n');
+
+                    let currentRoutine = [];
+                    let inRoutine = false;
+
+                    for (let line of lines) {
+                        const trimmed = line.trim();
+                        if (trimmed.startsWith('Attribute VB_')) continue;
+
+                        if (/^(?:Public\s+|Private\s+|Friend\s+)?(?:Static\s+)?(?:Sub|Function|Property\s+Get|Property\s+Let|Property\s+Set)\s+([a-zA-Z0-9_]+)/i.test(trimmed)) {
+                            inRoutine = true;
+                            currentRoutine = [line];
+                        } else if (inRoutine) {
+                            currentRoutine.push(line);
+                            if (/^End\s+(?:Sub|Function|Property)/i.test(trimmed)) {
+                                const block = currentRoutine.join('\n').trim();
+                                let isClean = true;
+                                for (let c = 0; c < block.length; c++) {
+                                    const code = block.charCodeAt(c);
+                                    if (code !== 9 && code !== 10 && code !== 13 && (code < 32 || (code > 126 && code < 160))) {
+                                        isClean = false;
+                                        break;
+                                    }
+                                }
+                                if (isClean && !seenSignatures.has(block)) {
+                                    seenSignatures.add(block);
+                                    extractedBlocks.push(block);
+                                }
+                                inRoutine = false;
+                                currentRoutine = [];
+                            }
+                        }
+                    }
+                }
+            }
+
+            return extractedBlocks;
+        }
+
         async function extractVBA(buffer) {
             try {
                 const zip = await JSZip.loadAsync(buffer);
@@ -355,39 +446,10 @@
                 if (!vbaEntry) return '';
 
                 const vbaBuffer = await vbaEntry.async('uint8array');
-                const extractedCodes = [];
+                const routines = extractCleanVBAModules(vbaBuffer);
 
-                // 1. Quét tìm và giải nén các đoạn MS-OVBA nén
-                for (let i = 0; i < vbaBuffer.length - 10; i++) {
-                    if (vbaBuffer[i] === 0x01 && (vbaBuffer[i + 2] & 0xF0) === 0xB0) {
-                        const slice = vbaBuffer.subarray(i);
-                        const decomp = decompressMSOVBA(slice);
-                        if (decomp && (decomp.includes('Sub ') || decomp.includes('Function ') || decomp.includes('Attribute VB_Name') || decomp.includes('Dim '))) {
-                            let cleanCode = decomp.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-                            cleanCode = cleanCode.split('\n').filter(line => !line.startsWith('Attribute VB_')).join('\n').trim();
-                            if (cleanCode && !extractedCodes.includes(cleanCode)) {
-                                extractedCodes.push(cleanCode);
-                            }
-                        }
-                    }
-                }
-
-                // 2. Quét chuỗi text thô nếu giải nén chưa quét hết
-                if (extractedCodes.length === 0) {
-                    const rawText = new TextDecoder('latin1').decode(vbaBuffer);
-                    const subMatches = rawText.match(/(?:Sub|Function|Private Sub|Public Sub)\s+[a-zA-Z0-9_]+[\s\S]*?End (?:Sub|Function)/gi);
-                    if (subMatches) {
-                        subMatches.forEach(m => {
-                            const cleaned = m.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\xFF]/g, '').trim();
-                            if (cleaned.length > 10 && !extractedCodes.includes(cleaned)) {
-                                extractedCodes.push(cleaned);
-                            }
-                        });
-                    }
-                }
-
-                if (extractedCodes.length > 0) {
-                    return `\n\n## Mã nguồn VBA Macros (Code đính kèm)\n\n\`\`\`vba\n${extractedCodes.join('\n\n\' ----------------------------------------\n\n')}\n\`\`\`\n`;
+                if (routines.length > 0) {
+                    return `\n\n## Mã nguồn VBA Macros (Code đính kèm)\n\n\`\`\`vba\nOption Explicit\n\n${routines.join('\n\n')}\n\`\`\`\n`;
                 } else {
                     return `\n\n## VBA Macros\n*Phát hiện module VBA Macros trong tệp Office này (vbaProject.bin).*\n`;
                 }

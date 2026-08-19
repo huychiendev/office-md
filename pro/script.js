@@ -102,10 +102,470 @@
             return '';
         }
 
+        // --- DRAWINGML FLOWCHART & MERMAID GRAPH ENGINE ---
+        function getXmlElements(parent, tagName) {
+            if (!parent) return [];
+            const plainTag = tagName.includes(':') ? tagName.split(':')[1] : tagName;
+            const prefixTag = tagName.includes(':') ? tagName : `xdr:${tagName}`;
+            const res1 = parent.getElementsByTagName ? Array.from(parent.getElementsByTagName(prefixTag)) : [];
+            const res2 = parent.getElementsByTagName ? Array.from(parent.getElementsByTagName(plainTag)) : [];
+            const res3 = parent.getElementsByTagName ? Array.from(parent.getElementsByTagName(`a:${plainTag}`)) : [];
+            const set = new Set([...res1, ...res2, ...res3]);
+            return Array.from(set);
+        }
+
+        function getXmlFirst(parent, tagName) {
+            const list = getXmlElements(parent, tagName);
+            return list.length > 0 ? list[0] : null;
+        }
+
+        function getXmlText(parent, tagName) {
+            const el = getXmlFirst(parent, tagName);
+            return el ? (el.textContent || '').trim() : '';
+        }
+
+        async function extractDrawingFlowcharts(zip, workbook) {
+            const flowcharts = {};
+            if (!zip || !workbook || typeof DOMParser === 'undefined') return flowcharts;
+
+            const parser = new DOMParser();
+
+            try {
+                const wbXmlStr = await zip.file('xl/workbook.xml')?.async('string');
+                const wbRelsStr = await zip.file('xl/_rels/workbook.xml.rels')?.async('string');
+                if (!wbXmlStr) return flowcharts;
+
+                const wbDoc = parser.parseFromString(wbXmlStr, 'text/xml');
+                const wbRelsDoc = wbRelsStr ? parser.parseFromString(wbRelsStr, 'text/xml') : null;
+
+                const relIdToTarget = {};
+                if (wbRelsDoc) {
+                    const rels = wbRelsDoc.getElementsByTagName('Relationship');
+                    for (let i = 0; i < rels.length; i++) {
+                        const r = rels[i];
+                        const id = r.getAttribute('Id');
+                        const target = r.getAttribute('Target') || '';
+                        relIdToTarget[id] = 'xl/' + target.replace(/^\.\.\//, '').replace(/^\//, '');
+                    }
+                }
+
+                const sheetIdToFile = {};
+                const sheetElements = getXmlElements(wbDoc, 'sheet');
+                for (let i = 0; i < sheetElements.length; i++) {
+                    const s = sheetElements[i];
+                    const name = s.getAttribute('name');
+                    const sheetId = s.getAttribute('sheetId') || String(i + 1);
+                    const rId = s.getAttribute('r:id') || s.getAttribute('id') || s.getAttribute('relationships:id');
+                    if (rId && relIdToTarget[rId]) {
+                        sheetIdToFile[sheetId] = relIdToTarget[rId];
+                        sheetIdToFile[name] = relIdToTarget[rId];
+                    } else {
+                        sheetIdToFile[sheetId] = `xl/worksheets/sheet${sheetId}.xml`;
+                        sheetIdToFile[name] = `xl/worksheets/sheet${sheetId}.xml`;
+                    }
+                }
+
+                for (const worksheet of workbook.worksheets) {
+                    const sheetFile = sheetIdToFile[String(worksheet.id)] || sheetIdToFile[worksheet.name] || `xl/worksheets/sheet${worksheet.id}.xml`;
+                    const sheetRelsFile = sheetFile.replace('xl/worksheets/', 'xl/worksheets/_rels/') + '.rels';
+                    const sheetRelsStr = await zip.file(sheetRelsFile)?.async('string');
+                    if (!sheetRelsStr) continue;
+
+                    const sheetRelsDoc = parser.parseFromString(sheetRelsStr, 'text/xml');
+                    const sheetRels = sheetRelsDoc.getElementsByTagName('Relationship');
+                    let drawingFile = null;
+                    for (let i = 0; i < sheetRels.length; i++) {
+                        const r = sheetRels[i];
+                        const type = r.getAttribute('Type') || '';
+                        if (type.includes('drawing')) {
+                            const target = r.getAttribute('Target') || '';
+                            drawingFile = 'xl/' + target.replace(/^\.\.\//, '').replace(/^\//, '');
+                            break;
+                        }
+                    }
+
+                    if (!drawingFile || !zip.file(drawingFile)) continue;
+
+                    const drawingXmlStr = await zip.file(drawingFile).async('string');
+                    const dDoc = parser.parseFromString(drawingXmlStr, 'text/xml');
+
+                    function parseAnchor(node) {
+                        if (!node) return null;
+                        const col = parseInt(getXmlText(node, 'col') || '0', 10);
+                        const row = parseInt(getXmlText(node, 'row') || '0', 10);
+                        const colOff = parseInt(getXmlText(node, 'colOff') || '0', 10);
+                        const rowOff = parseInt(getXmlText(node, 'rowOff') || '0', 10);
+                        return { col, row, colOff, rowOff };
+                    }
+
+                    const shapes = [];
+                    const connectors = [];
+
+                    const twoCellAnchors = getXmlElements(dDoc, 'twoCellAnchor');
+                    const oneCellAnchors = getXmlElements(dDoc, 'oneCellAnchor');
+                    const allAnchors = [...twoCellAnchors, ...oneCellAnchors];
+
+                    for (const anc of allAnchors) {
+                        const sp = getXmlFirst(anc, 'sp');
+                        const cxnSp = getXmlFirst(anc, 'cxnSp');
+                        const fromAnc = parseAnchor(getXmlFirst(anc, 'from'));
+                        const toAnc = parseAnchor(getXmlFirst(anc, 'to'));
+
+                        if (sp) {
+                            const cNvPr = getXmlFirst(sp, 'cNvPr');
+                            const textElements = getXmlElements(sp, 't');
+                            const textLines = textElements.map(t => (t.textContent || '').trim()).filter(Boolean);
+                            const textStr = textLines.join('\n').trim();
+                            const geomEl = getXmlFirst(sp, 'prstGeom');
+                            const geom = geomEl ? (geomEl.getAttribute('prst') || 'rect') : 'rect';
+
+                            shapes.push({
+                                id: cNvPr ? cNvPr.getAttribute('id') : '',
+                                name: cNvPr ? cNvPr.getAttribute('name') : '',
+                                text: textStr,
+                                geom: geom,
+                                from: fromAnc,
+                                to: toAnc
+                            });
+                        } else if (cxnSp) {
+                            const cNvPr = getXmlFirst(cxnSp, 'cNvPr');
+                            const stCxn = getXmlFirst(cxnSp, 'stCxn');
+                            const endCxn = getXmlFirst(cxnSp, 'endCxn');
+                            const ln = getXmlFirst(cxnSp, 'ln');
+                            const tail = ln ? getXmlFirst(ln, 'tailEnd') : null;
+                            const head = ln ? getXmlFirst(ln, 'headEnd') : null;
+                            const xfrm = getXmlFirst(cxnSp, 'xfrm');
+                            const geomEl = getXmlFirst(cxnSp, 'prstGeom');
+
+                            connectors.push({
+                                id: cNvPr ? cNvPr.getAttribute('id') : '',
+                                name: cNvPr ? cNvPr.getAttribute('name') : '',
+                                st_id: stCxn ? stCxn.getAttribute('id') : null,
+                                end_id: endCxn ? endCxn.getAttribute('id') : null,
+                                from: fromAnc,
+                                to: toAnc,
+                                geom: geomEl ? (geomEl.getAttribute('prst') || 'line') : 'line',
+                                tail: tail ? (tail.getAttribute('type') || null) : null,
+                                head: head ? (head.getAttribute('type') || null) : null,
+                                rot: xfrm ? xfrm.getAttribute('rot') : null,
+                                flipH: xfrm ? xfrm.getAttribute('flipH') : null,
+                                flipV: xfrm ? xfrm.getAttribute('flipV') : null,
+                            });
+                        }
+                    }
+
+                    // Deduplicate connectors
+                    const uniqueConnectors = [];
+                    const seenCxn = new Set();
+                    for (const c of connectors) {
+                        if (!c.from || !c.to) continue;
+                        if (c.from.col === c.to.col && c.from.row === c.to.row && c.from.colOff === c.to.colOff && c.from.rowOff === c.to.rowOff) {
+                            continue;
+                        }
+                        const key = `${c.from.col}_${c.from.row}_${c.to.col}_${c.to.row}_${c.geom}_${c.tail}_${c.head}_${c.flipV}`;
+                        if (!seenCxn.has(key)) {
+                            seenCxn.add(key);
+                            uniqueConnectors.push(c);
+                        }
+                    }
+
+                    if (uniqueConnectors.length === 0 && shapes.length === 0) continue;
+
+                    const shapesWithLongText = shapes.filter(s => s.text && s.text.length > 15);
+                    let nodes = [];
+                    let floatingLabels = [];
+
+                    if (shapesWithLongText.length >= 3) {
+                        // Pattern A: Shapes are nodes
+                        shapesWithLongText.forEach((s, idx) => {
+                            nodes.push({
+                                id: `N${idx + 1}`,
+                                shape_id: s.id,
+                                label: s.text,
+                                col: [s.from.col, s.to ? s.to.col : s.from.col],
+                                row: [s.from.row, s.to ? s.to.row : s.from.row],
+                                lane: 'Chung'
+                            });
+                        });
+                        floatingLabels = shapes.filter(s => s.text && s.text.length <= 15);
+                    } else {
+                        // Pattern B: Grid cells are nodes, shapes are condition labels
+                        let minDiagRow = 9999;
+                        let maxDiagRow = 0;
+                        for (const c of uniqueConnectors) {
+                            minDiagRow = Math.min(minDiagRow, c.from.row, c.to.row);
+                            maxDiagRow = Math.max(maxDiagRow, c.from.row, c.to.row);
+                        }
+                        for (const s of shapes) {
+                            if (s.from && s.to) {
+                                minDiagRow = Math.min(minDiagRow, s.from.row, s.to.row);
+                                maxDiagRow = Math.max(maxDiagRow, s.from.row, s.to.row);
+                            }
+                        }
+
+                        const diagRowStart = Math.max(1, minDiagRow - 4);
+                        let diagRowEnd = Math.min(worksheet.rowCount || 50, maxDiagRow + 3);
+
+                        for (let r = diagRowStart; r <= (worksheet.rowCount || 50); r++) {
+                            const row = worksheet.getRow(r);
+                            const c1Val = String(row.getCell(1).value || row.getCell(2).value || '');
+                            if (/^(II\.|2\.|Bảng|Báo biểu)/i.test(c1Val.trim()) && r > minDiagRow) {
+                                diagRowEnd = Math.min(diagRowEnd, r - 1);
+                                break;
+                            }
+                        }
+
+                        const rawBlocks = [];
+                        for (let r = diagRowStart; r <= diagRowEnd; r++) {
+                            const row = worksheet.getRow(r);
+                            for (let c = 1; c <= Math.min(worksheet.columnCount || 35, 35); c++) {
+                                const cell = row.getCell(c);
+                                if (cell.value !== null && cell.value !== undefined) {
+                                    if (cell.isMerged && cell.master && cell.address !== cell.master.address) {
+                                        continue;
+                                    }
+                                    let text = formatCellValue(cell).trim();
+                                    if (!text) continue;
+
+                                    let minR = r - 1, maxR = r - 1, minC = c - 1, maxC = c - 1;
+                                    if (cell.isMerged && cell.master) {
+                                        minR = cell.master.row - 1;
+                                        minC = cell.master.col - 1;
+                                        maxR = minR;
+                                        maxC = minC;
+                                    }
+
+                                    rawBlocks.push({
+                                        col_start: minC, col_end: maxC,
+                                        row_start: minR, row_end: maxR,
+                                        text: text
+                                    });
+                                }
+                            }
+                        }
+
+                        const laneKeywords = ['qad', 'lab', 'xưởng', 'ppc', 'qc', 'kho', 'wms', 'kế hoạch', '车间', '采购', '部门'];
+                        const lanes = [];
+                        for (const b of rawBlocks) {
+                            const tLower = b.text.toLowerCase();
+                            const isLane = laneKeywords.some(kw => tLower.includes(kw)) && b.text.length < 25 && (b.row_start <= 8 || b.col_start <= 2);
+                            if (isLane) {
+                                lanes.push({
+                                    id: `L_${lanes.length + 1}`,
+                                    name: b.text,
+                                    col_start: b.col_start, col_end: b.col_end,
+                                    row_start: b.row_start, row_end: b.row_end
+                                });
+                            }
+                        }
+
+                        const processBlocks = rawBlocks.filter(b => 
+                            !lanes.some(l => l.col_start === b.col_start && l.row_start === b.row_start) &&
+                            !/lưu trình|流程|irp/i.test(b.text) &&
+                            b.text.length > 1
+                        );
+
+                        const mergedNodes = [];
+                        const usedBlocks = new Set();
+                        for (let i = 0; i < processBlocks.length; i++) {
+                            if (usedBlocks.has(i)) continue;
+                            const b1 = processBlocks[i];
+                            let pairIdx = null;
+                            for (let j = 0; j < processBlocks.length; j++) {
+                                if (j !== i && !usedBlocks.has(j)) {
+                                    const b2 = processBlocks[j];
+                                    if (b2.col_start === b1.col_start && Math.abs(b2.row_start - b1.row_end) <= 4) {
+                                        pairIdx = j;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (pairIdx !== null) {
+                                const b2 = processBlocks[pairIdx];
+                                usedBlocks.add(i);
+                                usedBlocks.add(pairIdx);
+                                mergedNodes.push({
+                                    text: `${b1.text}\n${b2.text}`,
+                                    col: [Math.min(b1.col_start, b2.col_start), Math.max(b1.col_end, b2.col_end)],
+                                    row: [Math.min(b1.row_start, b2.row_start), Math.max(b1.row_end, b2.row_end)]
+                                });
+                            } else {
+                                usedBlocks.add(i);
+                                mergedNodes.push({
+                                    text: b1.text,
+                                    col: [b1.col_start, b1.col_end],
+                                    row: [b1.row_start, b1.row_end]
+                                });
+                            }
+                        }
+
+                        mergedNodes.forEach((mn, idx) => {
+                            let assignedLane = 'Chung';
+                            if (mn.col[0] <= 5) {
+                                assignedLane = mn.row[0] <= 15 ? 'QAD' : 'LAB';
+                            } else if (mn.col[0] >= 24) {
+                                assignedLane = 'PPC';
+                            } else if (mn.row[0] >= 18 && mn.row[0] <= 34 && mn.col[0] <= 18) {
+                                assignedLane = 'LAB';
+                            } else if (mn.row[0] <= 15) {
+                                assignedLane = 'Xưởng';
+                            }
+
+                            nodes.push({
+                                id: `N${idx + 1}`,
+                                label: mn.text,
+                                col: mn.col,
+                                row: mn.row,
+                                lane: assignedLane
+                            });
+                        });
+
+                        floatingLabels = shapes;
+                    }
+
+                    function findClosestNode(col, row) {
+                        let best = null;
+                        let bestDist = 9999;
+                        for (const n of nodes) {
+                            const [cMin, cMax] = n.col;
+                            const [rMin, rMax] = n.row;
+                            if (col >= cMin && col <= cMax + 1 && row >= rMin && row <= rMax + 1) {
+                                return n;
+                            }
+                            const dist = Math.min(Math.abs(col - cMin), Math.abs(col - cMax)) + Math.min(Math.abs(row - rMin), Math.abs(row - rMax));
+                            if (dist < bestDist && dist <= 4) {
+                                bestDist = dist;
+                                best = n;
+                            }
+                        }
+                        return best;
+                    }
+
+                    const edges = [];
+                    const seenEdges = new Set();
+
+                    for (const c of uniqueConnectors) {
+                        const sNode = findClosestNode(c.from.col, c.from.row);
+                        const tNode = findClosestNode(c.to.col, c.to.row);
+                        if (sNode && tNode && sNode.id !== tNode.id) {
+                            let condLabel = '';
+                            for (const fl of floatingLabels) {
+                                const flC = (fl.from.col + (fl.to ? fl.to.col : fl.from.col)) / 2;
+                                const flR = (fl.from.row + (fl.to ? fl.to.row : fl.from.row)) / 2;
+                                const minC = Math.min(c.from.col, c.to.col) - 2;
+                                const maxC = Math.max(c.from.col, c.to.col) + 2;
+                                const minR = Math.min(c.from.row, c.to.row) - 2;
+                                const maxR = Math.max(c.from.row, c.to.row) + 2;
+                                if (flC >= minC && flC <= maxC && flR >= minR && flR <= maxR) {
+                                    condLabel = fl.text.replace(/\n/g, ' / ');
+                                    break;
+                                }
+                            }
+
+                            const edgeKey = `${sNode.id}_${tNode.id}_${condLabel}`;
+                            if (!seenEdges.has(edgeKey)) {
+                                seenEdges.add(edgeKey);
+                                edges.push({
+                                    from: sNode.id,
+                                    to: tNode.id,
+                                    label: condLabel,
+                                    type: c.geom
+                                });
+                            }
+                        }
+                    }
+
+                    const connectedIds = new Set();
+                    for (const e of edges) {
+                        connectedIds.add(e.from);
+                        connectedIds.add(e.to);
+                    }
+
+                    const finalNodes = nodes.filter(n => connectedIds.has(n.id));
+                    if (finalNodes.length === 0) continue;
+
+                    // Generate Mermaid Diagram
+                    const mermaidLines = ['```mermaid', 'flowchart TD'];
+                    mermaidLines.push('    classDef laneQAD fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0f172a;');
+                    mermaidLines.push('    classDef laneXuong fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#0f172a;');
+                    mermaidLines.push('    classDef laneLAB fill:#f3e8ff,stroke:#9333ea,stroke-width:2px,color:#0f172a;');
+                    mermaidLines.push('    classDef lanePPC fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#0f172a;');
+                    mermaidLines.push('    classDef nodeEnd fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#991b1b;\n');
+
+                    const laneGroups = {};
+                    for (const n of finalNodes) {
+                        if (!laneGroups[n.lane]) laneGroups[n.lane] = [];
+                        laneGroups[n.lane].push(n);
+                    }
+
+                    for (const [lName, lNodes] of Object.entries(laneGroups)) {
+                        const safeLaneId = lName.replace(/[^a-zA-Z0-9_]/g, '_') + '_Lane';
+                        mermaidLines.push(`    subgraph ${safeLaneId}["Bộ phận ${lName}"]`);
+                        for (const n of lNodes) {
+                            const cleanTxt = n.label.replace(/"/g, "'").replace(/\n/g, '<br/>');
+                            let cls = 'laneQAD';
+                            const lowerLane = lName.toLowerCase();
+                            if (lowerLane.includes('xưởng') || lowerLane.includes('车间')) cls = 'laneXuong';
+                            else if (lowerLane.includes('lab')) cls = 'laneLAB';
+                            else if (lowerLane.includes('ppc')) cls = 'lanePPC';
+                            if (cleanTxt.toLowerCase().includes('kết thúc') || cleanTxt.toLowerCase().includes('结尾')) cls = 'nodeEnd';
+                            mermaidLines.push(`        ${n.id}["${cleanTxt}"]:::${cls}`);
+                        }
+                        mermaidLines.push('    end\n');
+                    }
+
+                    for (const e of edges) {
+                        const lbl = e.label ? `|${e.label}|` : '';
+                        mermaidLines.push(`    ${e.from} -->${lbl} ${e.to}`);
+                    }
+
+                    mermaidLines.push('```\n');
+
+                    // Generate Structured Specification Table
+                    const specLines = [
+                        '\n### Chi tiết Các bước trong Quy trình (Process Steps Specification)\n',
+                        '| Mã bước | Tên bước nghiệp vụ & Thao tác | Bộ phận phụ trách | Tọa độ ô |',
+                        '| :--- | :--- | :--- | :--- |'
+                    ];
+
+                    for (const n of finalNodes) {
+                        const cleanTxt = n.label.replace(/\n/g, ' <br/> ');
+                        const coordStr = `C${n.col[0] + 1}..C${n.col[1] + 1}, R${n.row[0] + 1}..R${n.row[1] + 1}`;
+                        specLines.push(`| **${n.id}** | ${cleanTxt} | **${n.lane}** | \`${coordStr}\` |`);
+                    }
+
+                    specLines.push('\n### Ma trận Điều kiện Rẽ nhánh & Luân chuyển (Decision & Transition Matrix)\n');
+                    specLines.push('| Từ bước (Source) | Điều kiện / Nhãn rẽ nhánh | Tới bước (Target) |');
+                    specLines.push('| :--- | :--- | :--- |');
+
+                    for (const e of edges) {
+                        const sNode = finalNodes.find(n => n.id === e.from);
+                        const tNode = finalNodes.find(n => n.id === e.to);
+                        const sName = sNode ? sNode.label.split('\n')[0] : e.from;
+                        const tName = tNode ? tNode.label.split('\n')[0] : e.to;
+                        const lbl = e.label ? `\`${e.label}\`` : '*(Luồng mặc định)*';
+                        specLines.push(`| **${e.from}** (${sName}) | ${lbl} | **${e.to}** (${tName}) |`);
+                    }
+
+                    const fullMarkdown = mermaidLines.join('\n') + '\n' + specLines.join('\n') + '\n';
+                    flowcharts[worksheet.id] = fullMarkdown;
+                    flowcharts[worksheet.name] = fullMarkdown;
+                }
+            } catch (e) {
+                console.warn('Error extracting DrawingML flowcharts:', e);
+            }
+
+            return flowcharts;
+        }
+
         // 1. EXCEL CONVERTER (ExcelJS + JSZip Hybrid Engine)
         async function convertExcel(buffer, filename, excludeHidden) {
             const workbook = new ExcelJS.Workbook();
             await workbook.xlsx.load(buffer);
+
+            const zip = await JSZip.loadAsync(buffer);
+            const sheetFlowcharts = await extractDrawingFlowcharts(zip, workbook);
 
             const parts = [];
             const partsPreview = [];
@@ -144,7 +604,6 @@
 
             // 2. Extra media scan via JSZip in xl/media/
             try {
-                const zip = await JSZip.loadAsync(buffer);
                 for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
                     if (relativePath.startsWith('xl/media/') && !zipEntry.dir) {
                         const ext = relativePath.split('.').pop() || 'png';
@@ -170,6 +629,13 @@
                 const sheetTitle = worksheet.state === 'hidden' ? `${worksheet.name} (sheet ẩn)` : worksheet.name;
                 parts.push(`\n## ${sheetTitle}\n`);
                 partsPreview.push(`\n## ${sheetTitle}\n`);
+
+                // Insert Flowchart / Mermaid diagram if available
+                const flowchartMd = sheetFlowcharts[worksheet.id] || sheetFlowcharts[worksheet.name];
+                if (flowchartMd) {
+                    parts.push(flowchartMd);
+                    partsPreview.push(flowchartMd);
+                }
 
                 // Check and attach sheet images
                 const sheetImageObjects = worksheet.getImages ? worksheet.getImages() : [];
@@ -580,6 +1046,13 @@
             }
 
             previewArea.innerHTML = marked.parse(previewMd);
+            if (window.mermaid) {
+                try {
+                    window.mermaid.run({ nodes: previewArea.querySelectorAll('.language-mermaid') });
+                } catch (e) {
+                    console.warn('Mermaid render:', e);
+                }
+            }
         }
 
         chkLimitRows.addEventListener('change', renderActiveDocument);
